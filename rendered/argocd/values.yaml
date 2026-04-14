@@ -1,0 +1,20 @@
+# ArgoCD Helm chart values
+# Install via: helm install argocd argo/argo-cd -n argocd -f values.yaml
+server:
+  service:
+    type: NodePort
+    nodePortHttps: 30443
+configs:
+  params:
+    server.insecure: true
+controller:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+redis:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+

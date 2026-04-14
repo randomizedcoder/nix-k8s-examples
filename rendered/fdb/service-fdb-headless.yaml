@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: fdb-headless
+  namespace: fdb
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app: fdb
+  ports:
+  - name: fdb
+    port: 4500
+    targetPort: 4500

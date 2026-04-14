@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fdb-config
+  namespace: fdb
+data:
+  fdb.cluster: |
+    k8s:k8s@fdb-0.fdb-headless.fdb.svc.cluster.local:4500,fdb-1.fdb-headless.fdb.svc.cluster.local:4500,fdb-2.fdb-headless.fdb.svc.cluster.local:4500
+  start-fdb.sh: |
+    #!/bin/sh
+    set -e
+    mkdir -p /var/fdb /data /var/log/fdb
+    # Cluster file must be writable — fdbserver rewrites it when
+    # coordinators change. Copy from RO configmap to writable path.
+    cp /etc/fdb-config/fdb.cluster /var/fdb/fdb.cluster
+    chmod 644 /var/fdb/fdb.cluster
+    exec fdbserver \
+      --public-address $POD_IP:4500 \
+      --listen-address 0.0.0.0:4500 \
+      --datadir /data \
+      --logdir /var/log/fdb \
+      --cluster-file /var/fdb/fdb.cluster

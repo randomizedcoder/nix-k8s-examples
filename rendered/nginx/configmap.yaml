@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-config
+  namespace: nginx
+data:
+  index.html: |
+    <!DOCTYPE html>
+    <html>
+    <head><title>K8s MicroVM Cluster</title></head>
+    <body>
+      <h1>Hello from K8s MicroVM Cluster!</h1>
+      <p>This page is served by nginx running on a NixOS MicroVM Kubernetes cluster.</p>
+    </body>
+    </html>
+

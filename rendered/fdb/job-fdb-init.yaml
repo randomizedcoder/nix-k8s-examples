@@ -1,0 +1,47 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: fdb-init
+  namespace: fdb
+spec:
+  backoffLimit: 5
+  template:
+    metadata:
+      labels:
+        app: fdb-init
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: init
+        image: foundationdb/foundationdb:7.3.27
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          set -e
+          mkdir -p /var/fdb
+          cp /etc/fdb-config/fdb.cluster /var/fdb/fdb.cluster
+          echo '=== Waiting for FDB coordinators ==='
+          for host in fdb-0.fdb-headless.fdb.svc.cluster.local fdb-1.fdb-headless.fdb.svc.cluster.local fdb-2.fdb-headless.fdb.svc.cluster.local; do
+            until nc -z -w2 $host 4500 2>/dev/null; do
+              echo "  waiting for $host:4500"
+              sleep 2
+            done
+            echo "  $host:4500 reachable"
+          done
+          echo ''
+          echo '=== Configuring database (triple ssd) ==='
+          fdbcli -C /var/fdb/fdb.cluster --timeout 60 --exec 'configure new triple ssd' || true
+          sleep 3
+          echo ''
+          echo '=== FDB status ==='
+          fdbcli -C /var/fdb/fdb.cluster --timeout 60 --exec 'status'
+        volumeMounts:
+        - name: fdb-config
+          mountPath: /etc/fdb-config
+      volumes:
+      - name: fdb-config
+        configMap:
+          name: fdb-config
+          items:
+          - key: fdb.cluster
+            path: fdb.cluster

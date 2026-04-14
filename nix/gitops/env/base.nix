@@ -3,6 +3,9 @@
 # Base cluster configuration: namespaces, RBAC.
 #
 { pkgs, lib }:
+let
+  constants = import ../../constants.nix;
+in
 {
   manifests = [
     {
@@ -66,6 +69,28 @@
         - apiGroups: [""]
           resources: ["nodes/proxy", "nodes/stats", "nodes/log", "nodes/spec", "nodes/metrics"]
           verbs: ["*"]
+      '';
+    }
+    {
+      name = "base/application.yaml";
+      content = ''
+        apiVersion: argoproj.io/v1alpha1
+        kind: Application
+        metadata:
+          name: base
+          namespace: argocd
+        spec:
+          project: default
+          source:
+            repoURL: ${constants.gitops.repoURL}
+            targetRevision: ${constants.gitops.targetRevision}
+            path: ${constants.gitops.renderedPath}/base
+          destination:
+            server: https://kubernetes.default.svc
+          syncPolicy:
+            automated:
+              prune: true
+              selfHeal: true
       '';
     }
   ];

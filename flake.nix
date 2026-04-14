@@ -97,6 +97,9 @@
           import (nixDir + "/gitops") { inherit pkgs lib; }
         );
 
+        # Rendered manifests script
+        renderScript = import (nixDir + "/render-script.nix") { inherit pkgs; };
+
       in
       {
         packages = vmPackages // lib.optionalAttrs pkgs.stdenv.isLinux (
@@ -157,6 +160,15 @@
               program = "${certs.genCerts}/bin/k8s-gen-certs";
             };
           }
+
+          # Rendered manifests
+          // {
+            k8s-render-manifests = {
+              type = "app";
+              program = "${renderScript}/bin/k8s-render-manifests";
+            };
+          }
+
           # Lifecycle test apps
           // (lifecycle.apps or {})
         );

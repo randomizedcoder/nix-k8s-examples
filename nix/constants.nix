@@ -133,6 +133,13 @@ rec {
     };
   };
 
+  # ─── GitOps Configuration ────────────────────────────────────────────
+  gitops = {
+    repoURL = "https://github.com/randomizedcoder/nix-k8s-examples.git";
+    targetRevision = "main";
+    renderedPath = "rendered";
+  };
+
   # ─── Helper Functions ──────────────────────────────────────────────
 
   # Get console ports for a node

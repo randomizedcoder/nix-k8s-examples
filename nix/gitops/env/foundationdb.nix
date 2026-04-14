@@ -19,6 +19,7 @@
 #
 { pkgs, lib }:
 let
+  constants = import ../../constants.nix;
   version = "7.3.27";
   ns = "fdb";
   domain = "svc.cluster.local";
@@ -386,6 +387,29 @@ in
         "            path: bench.sh"
         "      - name: data"
         "        emptyDir: {}"
+      ];
+    }
+    {
+      name = "fdb/application.yaml";
+      content = builtins.concatStringsSep "\n" [
+        "apiVersion: argoproj.io/v1alpha1"
+        "kind: Application"
+        "metadata:"
+        "  name: foundationdb"
+        "  namespace: argocd"
+        "spec:"
+        "  project: default"
+        "  source:"
+        "    repoURL: ${constants.gitops.repoURL}"
+        "    targetRevision: ${constants.gitops.targetRevision}"
+        "    path: ${constants.gitops.renderedPath}/fdb"
+        "  destination:"
+        "    server: https://kubernetes.default.svc"
+        "    namespace: ${ns}"
+        "  syncPolicy:"
+        "    automated:"
+        "      prune: true"
+        "      selfHeal: true"
       ];
     }
   ];
