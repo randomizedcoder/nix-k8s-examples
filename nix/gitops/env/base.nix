@@ -32,6 +32,11 @@
         kind: Namespace
         metadata:
           name: tidb
+        ---
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: fdb
       '';
     }
     {
