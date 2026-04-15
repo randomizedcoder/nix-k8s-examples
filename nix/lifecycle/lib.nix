@@ -77,12 +77,14 @@ let
   processHelpers = ''
     vm_is_running() {
       local hostname="$1"
-      pgrep -f "process=$hostname" >/dev/null 2>&1
+      # Use -x (exact process name) — QEMU's -name flag sets the process
+      # name. -f would match pgrep's own cmdline causing false positives.
+      pgrep -x "$hostname" >/dev/null 2>&1
     }
 
     vm_pid() {
       local hostname="$1"
-      pgrep -f "process=$hostname" 2>/dev/null | head -1
+      pgrep -x "$hostname" 2>/dev/null | head -1
     }
 
     wait_for_process() {

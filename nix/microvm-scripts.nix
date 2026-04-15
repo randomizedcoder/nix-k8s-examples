@@ -6,8 +6,10 @@
 let
   constants = import ./constants.nix;
 
-  # Pattern to identify our K8s MicroVMs in process list
-  vmPattern = "process=k8s-(cp0|cp1|cp2|w3)";
+  # Pattern to identify our K8s MicroVMs by process name.
+  # QEMU's -name flag sets the process name, so use pgrep -x (exact match)
+  # to avoid false positives from pgrep matching its own cmdline.
+  vmPattern = "k8s-(cp0|cp1|cp2|w3)";
 in
 {
   check = pkgs.writeShellApplication {
@@ -17,10 +19,10 @@ in
       echo "=== K8s MicroVM Processes ==="
       echo
 
-      if pgrep -af '${vmPattern}'; then
+      if pgrep -ax '${vmPattern}'; then
         echo
         echo "=== Count ==="
-        pgrep -cf '${vmPattern}'
+        pgrep -cx '${vmPattern}'
       else
         echo "(none running)"
         echo
@@ -36,23 +38,23 @@ in
     text = ''
       echo "=== Stopping K8s MicroVMs ==="
 
-      if ! pgrep -f '${vmPattern}' > /dev/null; then
+      if ! pgrep -x '${vmPattern}' > /dev/null; then
         echo "No K8s MicroVMs running."
         exit 0
       fi
 
       echo "Found processes:"
-      pgrep -af '${vmPattern}'
+      pgrep -ax '${vmPattern}'
 
       echo
       echo "Sending SIGTERM..."
-      pkill -f '${vmPattern}' || true
+      pkill -x '${vmPattern}' || true
 
       sleep 2
 
-      if pgrep -f '${vmPattern}' > /dev/null; then
+      if pgrep -x '${vmPattern}' > /dev/null; then
         echo "Processes still running, sending SIGKILL..."
-        pkill -9 -f '${vmPattern}' || true
+        pkill -9 -x '${vmPattern}' || true
       fi
 
       echo "Done."
