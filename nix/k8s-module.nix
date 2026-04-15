@@ -340,6 +340,36 @@ in
       RestrictAddressFamilies = [ "AF_INET" "AF_INET6" "AF_UNIX" "AF_NETLINK" ];
     };
 
+    # ─── Prometheus node_exporter ─────────────────────────────────────
+    # Host-level metrics for every VM. Port 9100 is reachable from the
+    # host via k8sbr0 (firewall disabled below). Collector set is tuned
+    # for deep network observability: NIC stats, TCP state, conntrack,
+    # qdisc, IRQ distribution, memory fragmentation.
+    services.prometheus.exporters.node = {
+      enable = true;
+      port = constants.nodeExporter.port;
+      listenAddress = constants.nodeExporter.listenAddress;
+      openFirewall = false;  # firewall is off anyway
+
+      enabledCollectors = [
+        # ── Network depth ────────────────────────────────────────────
+        "ethtool"         # NIC ring buffers, HW discards, PAUSE frames, MTU
+        "tcpstat"         # per-state TCP connection counts (TIME_WAIT, etc.)
+        "network_route"   # kernel routing table
+        "qdisc"           # queueing discipline drops / backlog
+        "interrupts"      # IRQ distribution across CPUs (RSS debugging)
+        "softirqs"        # softirq counts per CPU (NET_RX/NET_TX)
+        "buddyinfo"       # memory fragmentation — impacts skb allocation
+        # ── General usefulness ───────────────────────────────────────
+        "processes"       # processes by state (running/blocked/etc.)
+        "systemd"         # unit states (etcd/kubelet/containerd health)
+      ];
+
+      # Defaults already give us: netdev, netstat, netclass, sockstat,
+      # udp_queues, arp, conntrack, softnet, cpu, diskstats, filesystem,
+      # loadavg, meminfo, pressure, stat, vmstat, time, uname.
+    };
+
     # ─── Firewall ─────────────────────────────────────────────────────
     networking.firewall.enable = false;
   };

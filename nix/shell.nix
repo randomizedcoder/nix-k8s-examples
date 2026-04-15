@@ -18,6 +18,7 @@ pkgs.mkShell {
     sysbench
     nftables
     iproute2
+    curl
   ];
   shellHook = ''
     echo "K8s MicroVM Cluster Development Shell (3 CP + 1 Worker)"

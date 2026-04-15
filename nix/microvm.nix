@@ -13,6 +13,7 @@
   lib,
   microvm,
   k8sModule,
+  monitoringModule,
   nixpkgs,
   system,
   nodeName,       # "cp0", "w1", "w2", "w3"
@@ -39,6 +40,7 @@ let
     modules = [
       microvm.nixosModules.microvm
       k8sModule
+      monitoringModule
 
       ({ config, pkgs, ... }: {
         system.stateVersion = "26.05";
@@ -135,6 +137,9 @@ let
           nodeIp4 = nodeIp4;
           nodeIp6 = nodeIp6;
         };
+
+        # Prometheus + Grafana only on the designated monitoring host.
+        services.k8s-monitoring.enable = (nodeName == constants.prometheus.host);
       })
     ];
   };

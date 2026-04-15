@@ -102,6 +102,33 @@ rec {
     };
   };
 
+  # ─── Observability ─────────────────────────────────────────────────
+  nodeExporter = {
+    port = 9100;
+    listenAddress = "0.0.0.0";  # firewall disabled; bridge reachable
+  };
+
+  prometheus = {
+    port = 9090;
+    retentionTime = "15d";
+    # Host that runs the Prometheus server (scrapes all nodes).
+    host = "cp0";
+  };
+
+  grafana = {
+    port = 3000;
+    adminUser = "admin";
+    adminPassword = "admin";  # test cluster — consistent with ssh password "k8s"
+    secretKey = "SW2YcwTIb9zpOOhoPsMm";  # test cluster — legacy Grafana default
+    # Pinned rfmoz/grafana-dashboards (Node Exporter Full dashboard).
+    dashboardsRepo = {
+      owner = "rfmoz";
+      repo = "grafana-dashboards";
+      rev = "fa9f41fa3efed31d5c2de73cd332a340797c0ec7";
+      hash = "sha256-phqtDu/oLwqB+R+Dn9WyHyYbNcKR43uIy+F3BrAvwg4=";
+    };
+  };
+
   # ─── SSH Configuration ─────────────────────────────────────────────
   ssh = {
     password = "k8s";

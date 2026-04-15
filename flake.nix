@@ -67,6 +67,7 @@
         constants = import (nixDir + "/constants.nix");
         nodes = import (nixDir + "/nodes.nix") { inherit constants; };
         k8sModule = import (nixDir + "/k8s-module.nix");
+        monitoringModule = import (nixDir + "/monitoring-module.nix");
 
         # Import cert generation (build-time PKI)
         certs = import (nixDir + "/certs.nix") { inherit pkgs lib; };
@@ -74,7 +75,7 @@
         # ─── MicroVM Generator ───────────────────────────────────────────
         mkK8sNode = { nodeName, role }:
           import (nixDir + "/microvm.nix") {
-            inherit pkgs lib microvm k8sModule nixpkgs system;
+            inherit pkgs lib microvm k8sModule monitoringModule nixpkgs system;
             inherit nodeName role;
             nodePki = certs.mkNodePki { inherit nodeName role; };
           };
