@@ -123,14 +123,16 @@ in
     virtualisation.containerd = {
       enable = true;
       settings = {
-        version = 2;
-        plugins."io.containerd.grpc.v1.cri" = {
-          sandbox_image = "registry.k8s.io/pause:3.10";
+        version = lib.mkForce 3;
+        plugins."io.containerd.cri.v1.images".pinned_images = {
+          sandbox = "registry.k8s.io/pause:3.10";
+        };
+        plugins."io.containerd.cri.v1.runtime" = {
           containerd.runtimes.runc = {
             runtime_type = "io.containerd.runc.v2";
             options.SystemdCgroup = true;
           };
-          cni.bin_dir = "/opt/cni/bin";
+          cni.bin_dirs = [ "/opt/cni/bin" ];
           cni.conf_dir = "/etc/cni/net.d";
         };
       };
@@ -336,7 +338,7 @@ in
     # container runtimes.
     systemd.services.containerd.serviceConfig = {
       SystemCallArchitectures = "native";
-      UMask = "0077";
+      UMask = "0022";
       RestrictAddressFamilies = [ "AF_INET" "AF_INET6" "AF_UNIX" "AF_NETLINK" ];
     };
 

@@ -8,6 +8,7 @@ pkgs.mkShell {
     kubectl
     kubernetes-helm
     cilium-cli
+    hubble
     argocd
     step-cli
     socat

@@ -129,6 +129,37 @@ rec {
     };
   };
 
+  hubble = {
+    uiNodePort    = 31234;  # Hubble UI (HTTP)
+    relayNodePort = 31245;  # Hubble Relay gRPC (for `hubble` CLI)
+    # Metrics ports live on cilium-agent's host network (hostNetwork=true).
+    agentMetricsPort    = 9962;
+    operatorMetricsPort = 9963;
+    hubbleMetricsPort   = 9965;
+  };
+
+  # ─── Helm chart pins (rendered at Nix build time) ──────────────────
+  # Update these by running:
+  #   nix-prefetch-url --type sha256 <url>
+  #   nix hash convert --hash-algo sha256 --to sri <raw>
+  helmCharts = {
+    cilium = {
+      version = "1.19.3";
+      url     = "https://helm.cilium.io/cilium-1.19.3.tgz";
+      hash    = "sha256-yOBd+eq/kBnmL1ED4fNYFLTxtDkW+IUZ5a5ONsaapCs=";
+    };
+    argocd = {
+      version = "9.5.0";  # appVersion v3.3.6
+      url     = "https://github.com/argoproj/argo-helm/releases/download/argo-cd-9.5.0/argo-cd-9.5.0.tgz";
+      hash    = "sha256-2u2U/iCgJ3LFh4w2dKSXbaLF2au5oeIDVpkYnCnfjgk=";
+    };
+  };
+
+  # ─── ArgoCD service (NodePort reachable from host) ─────────────────
+  argocd = {
+    nodePortHttps = 30443;
+  };
+
   # ─── SSH Configuration ─────────────────────────────────────────────
   ssh = {
     password = "k8s";

@@ -68,16 +68,22 @@
         nodes = import (nixDir + "/nodes.nix") { inherit constants; };
         k8sModule = import (nixDir + "/k8s-module.nix");
         monitoringModule = import (nixDir + "/monitoring-module.nix");
+        bootstrapModule = import (nixDir + "/gitops-bootstrap-module.nix");
 
         # Import cert generation (build-time PKI)
         certs = import (nixDir + "/certs.nix") { inherit pkgs lib; };
 
+        # GitOps manifest generator (also consumed by the bootstrap unit)
+        gitops = import (nixDir + "/gitops") { inherit pkgs lib; };
+        k8sManifests = gitops.packages.k8s-manifests;
+
         # ─── MicroVM Generator ───────────────────────────────────────────
         mkK8sNode = { nodeName, role }:
           import (nixDir + "/microvm.nix") {
-            inherit pkgs lib microvm k8sModule monitoringModule nixpkgs system;
+            inherit pkgs lib microvm k8sModule monitoringModule bootstrapModule nixpkgs system;
             inherit nodeName role;
             nodePki = certs.mkNodePki { inherit nodeName role; };
+            inherit k8sManifests;
           };
 
         # Generate MicroVM packages for all nodes
@@ -93,11 +99,6 @@
           import (nixDir + "/lifecycle") { inherit pkgs lib; }
         );
 
-        # Import GitOps manifest generator (Linux only)
-        gitops = lib.optionalAttrs pkgs.stdenv.isLinux (
-          import (nixDir + "/gitops") { inherit pkgs lib; }
-        );
-
         # Rendered manifests script
         renderScript = import (nixDir + "/render-script.nix") { inherit pkgs; };
 
@@ -107,7 +108,7 @@
           # Lifecycle test packages
           (lifecycle.packages or {})
           # GitOps manifests
-          // (gitops.packages or {})
+          // gitops.packages
           # Cert generation (copies build-time certs to ./certs/ for inspection)
           // { k8s-gen-certs = certs.genCerts; }
           # Raw PKI store (all certs)
@@ -153,6 +154,14 @@
             k8s-start-all = {
               type = "app";
               program = "${vmScripts.startAll}/bin/k8s-start-all";
+            };
+            k8s-vm-wipe = {
+              type = "app";
+              program = "${vmScripts.wipe}/bin/k8s-vm-wipe";
+            };
+            k8s-cluster-rebuild = {
+              type = "app";
+              program = "${vmScripts.clusterRebuild}/bin/k8s-cluster-rebuild";
             };
 
             # Certificates (copies build-time certs to ./certs/ for inspection)

@@ -6,12 +6,12 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://argoproj.github.io/argo-helm
-    chart: argo-cd
-    targetRevision: "7.*"
-    helm:
-      valueFiles:
-      - values.yaml
+    repoURL: https://github.com/randomizedcoder/nix-k8s-examples.git
+    targetRevision: main
+    path: rendered/argocd
+    directory:
+      recurse: false
+      exclude: '{application.yaml,values.yaml}'
   destination:
     server: https://kubernetes.default.svc
     namespace: argocd
@@ -19,4 +19,7 @@ spec:
     automated:
       prune: true
       selfHeal: true
+    syncOptions:
+      - ServerSideApply=true
+      - CreateNamespace=true
 

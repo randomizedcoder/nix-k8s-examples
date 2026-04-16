@@ -48,8 +48,12 @@ pkgs.writeShellApplication {
 
     echo "=== Updating rendered/ ==="
     mkdir -p "$RENDERED_DIR"
+    # Previous render copied files from /nix/store; they're read-only.
+    # Make writable before removing.
+    chmod -R u+w "$RENDERED_DIR" 2>/dev/null || true
     rm -rf "''${RENDERED_DIR:?}"/*
     cp -rL "$REPO_ROOT/result/." "$RENDERED_DIR/"
+    chmod -R u+w "$RENDERED_DIR"
     rm -f "$RENDERED_DIR/README"
 
     echo ""

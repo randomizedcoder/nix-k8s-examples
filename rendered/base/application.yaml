@@ -9,6 +9,8 @@ spec:
     repoURL: https://github.com/randomizedcoder/nix-k8s-examples.git
     targetRevision: main
     path: rendered/base
+    directory:
+      exclude: 'application.yaml'
   destination:
     server: https://kubernetes.default.svc
   syncPolicy:

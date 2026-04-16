@@ -51,6 +51,30 @@ in
             labels = { instance = "cp0"; };
           }];
         }
+        # Cilium agents run with hostNetwork=true on every node, so
+        # their metrics endpoints are reachable directly on the node IP.
+        {
+          job_name = "cilium-agent";
+          static_configs = map (n: {
+            targets = [ "${constants.network.ipv4.${n}}:${toString constants.hubble.agentMetricsPort}" ];
+            labels = { instance = n; };
+          }) constants.nodeNames;
+        }
+        {
+          job_name = "hubble";
+          static_configs = map (n: {
+            targets = [ "${constants.network.ipv4.${n}}:${toString constants.hubble.hubbleMetricsPort}" ];
+            labels = { instance = n; };
+          }) constants.nodeNames;
+        }
+        {
+          # Operator runs on one node — scrape all and tolerate DOWN on 3.
+          job_name = "cilium-operator";
+          static_configs = map (n: {
+            targets = [ "${constants.network.ipv4.${n}}:${toString constants.hubble.operatorMetricsPort}" ];
+            labels = { instance = n; };
+          }) constants.nodeNames;
+        }
       ];
     };
 

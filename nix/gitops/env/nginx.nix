@@ -96,6 +96,8 @@ in
             repoURL: ${constants.gitops.repoURL}
             targetRevision: ${constants.gitops.targetRevision}
             path: ${constants.gitops.renderedPath}/nginx
+            directory:
+              exclude: 'application.yaml'
           destination:
             server: https://kubernetes.default.svc
             namespace: nginx

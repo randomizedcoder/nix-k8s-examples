@@ -1,5 +1,4 @@
-# Cilium Helm chart values
-# Install via: helm install cilium cilium/cilium -n kube-system -f values.yaml
+# Cilium Helm values — rendered at Nix build time.
 kubeProxyReplacement: true
 k8sServiceHost: "10.33.33.1"
 k8sServicePort: "6443"
@@ -12,15 +11,47 @@ ipv4:
 ipv6:
   enabled: true
 
+# ─── Hubble: flow visibility, UI, metrics ───────────────────────
 hubble:
   enabled: true
+  # Test env — mTLS disabled so `hubble` CLI from host just works.
+  tls:
+    enabled: false
+  peerService:
+    enabled: true
   relay:
     enabled: true
+    startupProbe:
+      failureThreshold: 40
+    service:
+      type: NodePort
+      nodePort: 31245
   ui:
     enabled: true
+    service:
+      type: NodePort
+      nodePort: 31234
+  metrics:
+    enableOpenMetrics: true
+    enabled:
+      - dns
+      - drop
+      - tcp
+      - flow
+      - port-distribution
+      - icmp
+      - "httpV2:exemplars=true;labelsContext=source_ip,source_namespace,source_workload,destination_ip,destination_namespace,destination_workload,traffic_direction"
+
+# ─── Expose cilium-agent + operator Prometheus endpoints ────────
+prometheus:
+  enabled: true
+  port: 9962
 
 operator:
   replicas: 1
+  prometheus:
+    enabled: true
+    port: 9963
   resources:
     requests:
       cpu: 50m

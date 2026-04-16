@@ -6,12 +6,12 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://helm.cilium.io/
-    chart: cilium
-    targetRevision: "1.*"
-    helm:
-      valueFiles:
-      - values.yaml
+    repoURL: https://github.com/randomizedcoder/nix-k8s-examples.git
+    targetRevision: main
+    path: rendered/cilium
+    directory:
+      recurse: false
+      exclude: '{application.yaml,values.yaml}'
   destination:
     server: https://kubernetes.default.svc
     namespace: kube-system
@@ -19,4 +19,7 @@ spec:
     automated:
       prune: true
       selfHeal: true
+    syncOptions:
+      - ServerSideApply=true
+      - CreateNamespace=true
 

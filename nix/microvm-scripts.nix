@@ -103,6 +103,59 @@ in
     '';
   };
 
+  wipe = pkgs.writeShellApplication {
+    name = "k8s-vm-wipe";
+    runtimeInputs = with pkgs; [ procps coreutils ];
+    text = ''
+      echo "=== Stopping K8s MicroVMs ==="
+      if pgrep -x '${vmPattern}' > /dev/null; then
+        pkill -x '${vmPattern}' || true
+        sleep 2
+        if pgrep -x '${vmPattern}' > /dev/null; then
+          pkill -9 -x '${vmPattern}' || true
+          sleep 1
+        fi
+      fi
+
+      echo ""
+      echo "=== Removing per-VM data images (etcd / containerd / kubelet state) ==="
+      REMOVED=0
+      for node in ${builtins.concatStringsSep " " constants.nodeNames}; do
+        img="k8s-$node-data.img"
+        if [ -f "$img" ]; then
+          rm -f "$img"
+          echo "  removed $img"
+          REMOVED=$((REMOVED + 1))
+        fi
+      done
+
+      echo ""
+      if [ "$REMOVED" -eq 0 ]; then
+        echo "No data images found. Nothing to wipe."
+      else
+        echo "Wiped $REMOVED data image(s)."
+      fi
+    '';
+  };
+
+  clusterRebuild = pkgs.writeShellApplication {
+    name = "k8s-cluster-rebuild";
+    runtimeInputs = with pkgs; [ nix coreutils ];
+    text = ''
+      echo "=== Wipe ==="
+      nix run .#k8s-vm-wipe
+
+      echo ""
+      echo "=== Start ==="
+      nix run .#k8s-start-all
+
+      echo ""
+      echo "Bootstrap runs on cp0 in the background."
+      echo "Watch progress with:"
+      echo "  nix run .#k8s-vm-ssh -- --node=cp0 journalctl -fu k8s-gitops-bootstrap"
+    '';
+  };
+
   startAll = pkgs.writeShellApplication {
     name = "k8s-start-all";
     runtimeInputs = with pkgs; [ procps nix coreutils ];

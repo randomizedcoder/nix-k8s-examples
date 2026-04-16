@@ -14,11 +14,13 @@
   microvm,
   k8sModule,
   monitoringModule,
+  bootstrapModule,
   nixpkgs,
   system,
   nodeName,       # "cp0", "w1", "w2", "w3"
   role,           # "control-plane" or "worker"
   nodePki,        # Per-node PKI bundle (from certs.mkNodePki)
+  k8sManifests,   # Rendered k8s manifests derivation
 }:
 let
   constants = import ./constants.nix;
@@ -41,6 +43,7 @@ let
       microvm.nixosModules.microvm
       k8sModule
       monitoringModule
+      bootstrapModule
 
       ({ config, pkgs, ... }: {
         system.stateVersion = "26.05";
@@ -140,6 +143,12 @@ let
 
         # Prometheus + Grafana only on the designated monitoring host.
         services.k8s-monitoring.enable = (nodeName == constants.prometheus.host);
+
+        # First-boot GitOps bootstrap only on cp0.
+        services.k8s-gitops-bootstrap = {
+          enable = (nodeName == "cp0");
+          manifestsPath = k8sManifests;
+        };
       })
     ];
   };
