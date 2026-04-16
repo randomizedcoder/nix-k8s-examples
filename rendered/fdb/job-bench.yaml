@@ -1,0 +1,71 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: fdb-bench
+  namespace: fdb
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app: fdb-bench
+    spec:
+      restartPolicy: Never
+      initContainers:
+      - name: wait-for-fdb
+        image: foundationdb/foundationdb:7.3.27
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          set -e
+          mkdir -p /var/fdb
+          cp /etc/fdb-config/fdb.cluster /var/fdb/fdb.cluster
+          for i in $(seq 1 60); do
+            if fdbcli -C /var/fdb/fdb.cluster --timeout 5 --exec 'status minimal' 2>&1 | grep -q 'available'; then
+              echo 'FDB is available'
+              exit 0
+            fi
+            echo "  waiting for FDB ($i/60)"
+            sleep 5
+          done
+          echo 'Timeout waiting for FDB'
+          exit 1
+        volumeMounts:
+        - name: fdb-config
+          mountPath: /etc/fdb-config
+        - name: data
+          mountPath: /var/fdb
+      containers:
+      - name: bench
+        image: foundationdb/foundationdb:7.3.27
+        command: ["/bin/bash", "/bench/bench.sh"]
+        volumeMounts:
+        - name: fdb-config
+          mountPath: /etc/fdb-config
+        - name: data
+          mountPath: /var/fdb
+        - name: bench-script
+          mountPath: /bench
+        resources:
+          requests:
+            cpu: 500m
+            memory: 256Mi
+          limits:
+            cpu: '2'
+            memory: 1Gi
+      volumes:
+      - name: fdb-config
+        configMap:
+          name: fdb-config
+          items:
+          - key: fdb.cluster
+            path: fdb.cluster
+      - name: bench-script
+        configMap:
+          name: fdb-bench
+          defaultMode: 0755
+          items:
+          - key: bench.sh
+            path: bench.sh
+      - name: data
+        emptyDir: {}

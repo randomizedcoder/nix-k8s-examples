@@ -1,16 +1,16 @@
 # K8s MicroVM Cluster
 
-HA Kubernetes cluster (3 control planes + 1 worker) running as NixOS MicroVMs with QEMU. All PKI is generated at Nix build time and baked into VM images. Host-side haproxy provides apiserver HA. Uses Cilium CNI, dual-stack networking, and GitOps deployment via ArgoCD.
+HA Kubernetes cluster (3 control planes + 1 worker) running as NixOS MicroVMs with QEMU. All PKI is generated at Nix build time and baked into VM images. Host-side haproxy provides apiserver HA. Uses Cilium CNI (replacing kube-proxy), dual-stack networking, CoreDNS, and GitOps deployment via ArgoCD.
 
 ## Architecture
 
 ```
 Host Machine (NixOS)
 ├── k8sbr0 (bridge): 10.33.33.1/24, fd33:33:33::1/64
-│   ├── k8stap0 → cp0  10.33.33.10  fd33:33:33::10  serial:25500 virtio:25501
-│   ├── k8stap1 → cp1  10.33.33.11  fd33:33:33::11  serial:25510 virtio:25511
-│   ├── k8stap2 → cp2  10.33.33.12  fd33:33:33::12  serial:25520 virtio:25521
-│   └── k8stap3 → w3   10.33.33.13  fd33:33:33::13  serial:25530 virtio:25531
+│   ├── k8stap0 → cp0  10.33.33.10  (8GB RAM, 4 vCPU)
+│   ├── k8stap1 → cp1  10.33.33.11  (8GB RAM, 4 vCPU)
+│   ├── k8stap2 → cp2  10.33.33.12  (8GB RAM, 4 vCPU)
+│   └── k8stap3 → w3   10.33.33.13  (6GB RAM, 2 vCPU)
 ├── haproxy on 10.33.33.1:6443 → load-balances to cp0, cp1, cp2
 ├── nftables NAT: masquerade outbound only (VM-to-VM traffic stays un-NATed)
 └── IP forwarding enabled (v4 + v6)
@@ -28,22 +28,272 @@ HA: 3-node etcd quorum (tolerates 1 CP failure), haproxy LB for apiserver
 ## Quick Start
 
 ```bash
-# Enter the dev shell (kubectl, helm, cilium-cli, step-cli, argocd, socat, expect, ...)
+# 1. Enter the dev shell (kubectl, helm, cilium-cli, hubble, argocd, step-cli, ...)
 nix develop
 
-# Verify the host has /dev/net/tun, vhost_net, bridge module, sudo
+# 2. Verify the host has /dev/net/tun, vhost_net, bridge module, sudo
 nix run .#k8s-check-host
 
-# Create bridge, 4 TAP devices, nftables NAT, haproxy apiserver LB
+# 3. Create bridge, 4 TAP devices, nftables NAT, haproxy apiserver LB
 sudo nix run .#k8s-network-setup
 
-# Build and start all 4 VMs (3 CPs first, then worker)
-# PKI is generated at build time and baked into VM images — no separate cert step needed
+# 4. Build and start all 4 VMs — bootstrap runs automatically on cp0
 nix run .#k8s-start-all
 
-# Verify the cluster (3 control planes + 1 worker)
+# 5. Watch bootstrap progress (Cilium → CoreDNS → ArgoCD → Applications)
+nix run .#k8s-vm-ssh -- --node=cp0 journalctl -fu k8s-gitops-bootstrap
+
+# 6. Verify the cluster
 nix run .#k8s-vm-ssh -- --node=cp0 kubectl get nodes
+nix run .#k8s-vm-ssh -- --node=cp0 kubectl get pods -A
 ```
+
+PKI is generated at build time and baked into VM images — no separate cert step needed.
+
+### Wipe and Rebuild
+
+The cluster can be completely torn down and rebuilt from scratch at any time:
+
+```bash
+# Stop all VMs, delete data images, start fresh — bootstrap re-runs automatically
+nix run .#k8s-cluster-rebuild
+
+# Or separately:
+nix run .#k8s-vm-wipe          # Stop VMs + delete data images
+nix run .#k8s-start-all        # Rebuild from scratch
+```
+
+## Services & Access
+
+After bootstrap completes (~2 minutes), the following services are accessible from the host:
+
+### Kubernetes API
+
+| Service | URL | Notes |
+|---------|-----|-------|
+| API Server (via haproxy LB) | `https://10.33.33.1:6443` | Load-balanced across 3 CPs |
+| API Server (direct cp0) | `https://10.33.33.10:6443` | Direct access to individual CP |
+
+```bash
+# SSH and run kubectl (uses in-VM kubeconfig)
+nix run .#k8s-vm-ssh -- --node=cp0 kubectl get nodes
+nix run .#k8s-vm-ssh -- --node=cp0 kubectl get pods -A
+nix run .#k8s-vm-ssh -- --node=cp0 kubectl -n argocd get applications
+```
+
+### ArgoCD
+
+| Service | URL | Notes |
+|---------|-----|-------|
+| ArgoCD UI | `https://10.33.33.10:30443` | NodePort (any node IP works) |
+
+ArgoCD manages 6 Applications (cilium, argocd, base, clickhouse, foundationdb, nginx) via the rendered manifests pattern. After first boot, ArgoCD is the source of truth via git.
+
+```bash
+# Get the initial admin password
+nix run .#k8s-vm-ssh -- --node=cp0 kubectl -n argocd get secret argocd-initial-admin-secret \
+  -o jsonpath='{.data.password}' | base64 -d
+
+# CLI access (from dev shell)
+argocd login 10.33.33.10:30443 --insecure --username admin --password <password>
+argocd app list
+```
+
+### Hubble (Network Observability)
+
+| Service | URL | Notes |
+|---------|-----|-------|
+| Hubble UI | `http://10.33.33.10:31234` | Web dashboard for flow visibility |
+| Hubble Relay | `grpc://10.33.33.10:31245` | gRPC endpoint for hubble CLI |
+
+```bash
+# Open in browser
+xdg-open http://10.33.33.10:31234
+
+# CLI access (from dev shell — TLS disabled for test cluster)
+hubble --server 10.33.33.10:31245 status
+hubble --server 10.33.33.10:31245 observe --last 20
+```
+
+### Monitoring
+
+| Service | URL | Notes |
+|---------|-----|-------|
+| Prometheus | `http://10.33.33.10:9090` | On cp0, 15-day retention |
+| Grafana | `http://10.33.33.10:3000` | admin/admin |
+| node-exporter | `http://10.33.33.{10,11,12,13}:9100` | All nodes |
+| Cilium Agent metrics | `:9962` on all nodes | Prometheus scrape target |
+| Cilium Operator metrics | `:9963` | Single instance |
+| Hubble metrics | `:9965` on all nodes | Flow metrics |
+
+### SSH
+
+| Node | IP | Password |
+|------|----|----------|
+| cp0 | 10.33.33.10 | `k8s` (root) |
+| cp1 | 10.33.33.11 | `k8s` (root) |
+| cp2 | 10.33.33.12 | `k8s` (root) |
+| w3  | 10.33.33.13 | `k8s` (root) |
+
+```bash
+nix run .#k8s-vm-ssh -- --node=cp0        # Interactive shell
+nix run .#k8s-vm-ssh -- --node=w3 uptime  # Run command on worker
+```
+
+### Serial Consoles
+
+For boot debugging when SSH isn't available:
+
+| Node | Serial (ttyS0) | Virtio (hvc0) |
+|------|----------------|---------------|
+| cp0 | `tcp:127.0.0.1:25500` | `tcp:127.0.0.1:25501` |
+| cp1 | `tcp:127.0.0.1:25510` | `tcp:127.0.0.1:25511` |
+| cp2 | `tcp:127.0.0.1:25520` | `tcp:127.0.0.1:25521` |
+| w3  | `tcp:127.0.0.1:25530` | `tcp:127.0.0.1:25531` |
+
+```bash
+socat -,rawer tcp:127.0.0.1:25500    # cp0 serial console
+```
+
+## Nix Targets Reference
+
+All targets are Linux-only (QEMU MicroVMs). Run any target with `nix run .#<name>`.
+
+### Network Management
+
+| Target | Sudo | Description |
+|--------|:----:|-------------|
+| `k8s-check-host` | No | Verify host prerequisites (/dev/net/tun, vhost_net, bridge module) |
+| `k8s-network-setup` | **Yes** | Create bridge (k8sbr0), 4 TAP devices, nftables NAT, haproxy LB |
+| `k8s-network-teardown` | **Yes** | Remove bridge, TAPs, NAT rules, stop haproxy |
+
+### VM Management
+
+| Target | Sudo | Description |
+|--------|:----:|-------------|
+| `k8s-start-all` | No | Build and start all 4 VMs (CPs first, then worker). Bootstrap runs on cp0 |
+| `k8s-vm-stop` | No | Stop all running VMs (SIGTERM → SIGKILL fallback) |
+| `k8s-vm-wipe` | No | Stop VMs and delete per-node data images (etcd, containerd, kubelet state) |
+| `k8s-cluster-rebuild` | No | Wipe + start-all in one command. Full clean rebuild from scratch |
+| `k8s-vm-check` | No | List running K8s MicroVM QEMU processes |
+| `k8s-vm-ssh` | No | SSH into a node. Default: cp0. Use `--node=cp1` for others |
+
+### GitOps & Manifests
+
+| Target | Sudo | Description |
+|--------|:----:|-------------|
+| `k8s-render-manifests` | No | Render Helm charts + Nix manifests to `rendered/` directory. Use `--check` for CI |
+| `k8s-manifests` (package) | No | `nix build .#k8s-manifests` — build all rendered YAML to Nix store |
+
+### Certificates
+
+| Target | Sudo | Description |
+|--------|:----:|-------------|
+| `k8s-gen-certs` | No | Copy build-time PKI to `./certs/` for inspection |
+
+### VM Packages
+
+Build individual VM images with `nix build .#<name>`:
+
+| Package | Description |
+|---------|-------------|
+| `k8s-microvm-cp0` | Control plane 0 (etcd, apiserver, CM, scheduler, kubelet) |
+| `k8s-microvm-cp1` | Control plane 1 |
+| `k8s-microvm-cp2` | Control plane 2 |
+| `k8s-microvm-w3`  | Worker node (kubelet only) |
+| `k8s-pki` | Raw PKI store (all certificates) |
+
+### Lifecycle Testing
+
+| Target | Description |
+|--------|-------------|
+| `k8s-lifecycle-test-cp0` | Per-node test: build → boot → console → SSH → certs → services → k8s → shutdown |
+| `k8s-lifecycle-test-cp1` | Same for cp1 |
+| `k8s-lifecycle-test-cp2` | Same for cp2 |
+| `k8s-lifecycle-test-w3` | Same for w3 |
+| `k8s-lifecycle-test-all` | Run all 4 per-node tests sequentially |
+| `k8s-cluster-test` | Full cluster integration: etcd quorum, apiserver, node registration |
+
+### Dev Shell
+
+```bash
+nix develop
+```
+
+Available tools: `kubectl`, `kubernetes-helm`, `cilium-cli`, `hubble`, `argocd`, `step-cli`, `socat`, `expect`, `sshpass`, `jq`, `mariadb`, `sysbench`, `nftables`, `iproute2`, `curl`
+
+## Bootstrap Sequence
+
+On first boot, a systemd oneshot service (`k8s-gitops-bootstrap`) on cp0 automatically deploys the cluster stack in order:
+
+```
+1. Wait for apiserver (https://localhost:6443/livez)
+2. Apply base manifests (namespaces, RBAC, CoreDNS)
+   └── Wait for CoreDNS rollout
+3. Apply Cilium CNI (helm-templated at Nix build time)
+   └── Wait for Cilium DaemonSet rollout
+4. Create argocd-redis Secret
+5. Apply ArgoCD (helm-templated at Nix build time)
+   └── Wait for Application CRD + argocd-server rollout
+6. Apply all ArgoCD Application CRs
+   (cilium, argocd, base, clickhouse, foundationdb, nginx)
+7. Touch /var/lib/k8s-bootstrap/done (idempotent marker)
+```
+
+The bootstrap uses manifests baked into the Nix store (no git fetch needed — CNI isn't up yet when it starts). After day 1, ArgoCD is the source of truth via the git repo.
+
+Watch progress: `nix run .#k8s-vm-ssh -- --node=cp0 journalctl -fu k8s-gitops-bootstrap`
+
+## Rendered Manifests Pattern
+
+This project implements the [rendered manifests pattern](https://akuity.io/blog/the-rendered-manifests-pattern) for GitOps. All Helm charts are rendered via `helm template` at Nix build time into plain YAML — ArgoCD only applies static manifests, with no in-cluster Helm templating.
+
+### How it works
+
+1. **Nix expressions** in `nix/gitops/env/` define each component declaratively
+2. **Helm charts** (Cilium, ArgoCD) are pinned by version + SRI hash in `constants.nix` and rendered via `helm template` at build time by `nix/gitops/helm-chart.nix`
+3. **Plain YAML components** (ClickHouse, FoundationDB, nginx, base) are defined inline in Nix
+4. `nix run .#k8s-render-manifests` builds everything and copies to `rendered/`
+5. `rendered/` is committed to git — full audit trail of actual YAML changes
+6. **ArgoCD Application CRs** point at `rendered/<component>/` directories using path-source, with `directory.exclude` to skip the Application CR itself
+
+### Pinned Helm Charts
+
+| Chart | Version | App Version |
+|-------|---------|-------------|
+| Cilium | 1.19.3 | 1.19.3 |
+| ArgoCD (argo-cd) | 9.5.0 | v3.3.6 |
+
+### Workflow
+
+```bash
+# 1. Edit Nix source (e.g. change Cilium values, add a component)
+vim nix/gitops/env/cilium.nix
+
+# 2. Render manifests
+nix run .#k8s-render-manifests
+
+# 3. Review the actual YAML diff
+git diff rendered/
+
+# 4. Commit both source and rendered output
+git add nix/gitops/ rendered/
+git commit -m "Update cilium Hubble config"
+
+# 5. Verify rendered/ is up to date (CI / pre-commit check)
+nix run .#k8s-render-manifests -- --check
+```
+
+### Deployed Components
+
+| Component | Type | Description |
+|-----------|------|-------------|
+| **base** | Plain YAML | Namespaces, RBAC (apiserver→kubelet), CoreDNS (2 replicas) |
+| **Cilium** | Helm-rendered | CNI (replaces kube-proxy), dual-stack, Hubble UI/Relay/metrics |
+| **ArgoCD** | Helm-rendered | GitOps controller, self-managing via path-source Application |
+| **ClickHouse** | Plain YAML | 3 Keeper (Raft) + 2 shards x 2 replicas, ReplicatedMergeTree |
+| **FoundationDB** | Plain YAML | 3 coordinators + 4 storage, triple-ssd replication, benchmark |
+| **nginx** | Plain YAML | Hello-world deployment + NodePort service |
 
 ## Certificate Architecture (PKI)
 
@@ -168,11 +418,23 @@ nix build .#k8s-microvm-cp0
 
 All kubeconfigs point to `https://10.33.33.1:6443` (the haproxy VIP), not to any individual control plane node. This means kubelets and kubectl work through the load balancer for HA.
 
+### Certificate Inspection
+
+```bash
+# Copy build-time certs to ./certs/ for inspection
+nix run .#k8s-gen-certs
+
+# Inspect a cert
+openssl x509 -in ./certs/apiserver.crt -text -noout | grep -A1 "Subject Alternative Name"
+
+# Verify cert chain on a running node
+nix run .#k8s-vm-ssh -- --node=cp0 openssl verify \
+  -CAfile /var/lib/kubernetes/pki/ca.crt /var/lib/kubernetes/pki/apiserver.crt
+```
+
 ## API Server High Availability (haproxy)
 
 The cluster uses a host-side haproxy to load-balance the Kubernetes API endpoint across all 3 control plane nodes. This solves the chicken-and-egg problem: kubelets and Cilium need a stable apiserver endpoint before in-cluster service routing exists.
-
-### Why haproxy on the Host?
 
 ```
                     ┌─────────────────────────────────────────┐
@@ -202,14 +464,7 @@ The cluster uses a host-side haproxy to load-balance the Kubernetes API endpoint
 | 2 CPs down | Routes all traffic to surviving CP; etcd still has quorum if 2/3 up |
 | etcd quorum lost (2+ CPs down) | Apiserver becomes read-only, writes fail |
 
-### Why Not Cilium for HA?
-
-Cilium provides in-cluster service load balancing via eBPF, but it can't provide the initial apiserver endpoint because:
-1. Cilium agent needs to connect to apiserver to get its configuration
-2. kubelet needs apiserver to register the node before Cilium can run
-3. The `kubernetes` ClusterIP (10.96.0.1) only works after Cilium networking is up
-
-haproxy on the host bridge runs outside the cluster and is available before any VM boots.
+Cilium provides in-cluster service load balancing via eBPF, but it can't provide the initial apiserver endpoint because Cilium itself needs apiserver to get its configuration. haproxy on the host bridge runs outside the cluster and is available before any VM boots.
 
 ## systemd Service Hardening
 
@@ -243,23 +498,7 @@ These are network services that read certificates, listen on TCP ports, and talk
 
 ### Why kubelet and containerd Score Higher (5.7)
 
-kubelet and containerd are the container runtime layer — they are responsible for creating, managing, and destroying containers on the node. This fundamentally requires elevated privileges:
-
-- **CAP_SYS_ADMIN**: Creating cgroups for container resource limits, mounting filesystems for container volumes, managing Linux namespaces for container isolation
-- **CAP_NET_ADMIN / CAP_NET_RAW**: Setting up container networking (veth pairs, routes, iptables rules for port mapping, ICMP for health checks)
-- **CAP_CHOWN / CAP_FOWNER / CAP_DAC_OVERRIDE**: Setting file ownership inside container volumes, accessing files across user boundaries for volume mounts
-- **CAP_SETUID / CAP_SETGID**: Running container processes as non-root users (the container's UID/GID, not the host's)
-- **CAP_MKNOD**: Creating device nodes inside containers (e.g., `/dev/null`, `/dev/zero`)
-- **CAP_SYS_CHROOT**: Container filesystem isolation via `chroot`/`pivot_root`
-- **CAP_SYS_RESOURCE**: Setting resource limits (ulimits) for container processes
-- **CAP_KILL**: Sending signals to container processes (stop, restart, health check timeouts)
-- **CAP_SYSLOG**: Reading `/dev/kmsg` when `kernel.dmesg_restrict=1` (kubelet monitors kernel messages)
-- **Namespace creation**: Cannot be restricted — containers *are* namespaces (pid, net, mnt, uts, ipc, cgroup)
-- **Mount syscalls**: Containers require mounting overlayfs layers, tmpfs, procfs, sysfs, and bind mounts for volumes
-
-These are not optional — without them, kubelet cannot create pods and containerd cannot run containers. The 5.7 MEDIUM score represents the inherent privilege floor for any container runtime. The hardening that *is* applied (ProtectHome, ProtectKernelModules, ProtectClock, ProtectHostname, MemoryDenyWriteExecute, LockPersonality, restricted address families, syscall filtering) still eliminates capabilities and attack surface that container management doesn't need.
-
-### Verifying Scores
+kubelet and containerd are the container runtime layer — they fundamentally require elevated privileges to create and manage containers (cgroups, namespaces, overlay mounts, veth pairs). The 5.7 MEDIUM score represents the inherent privilege floor for any container runtime. Hardening that *is* applied (ProtectHome, ProtectKernelModules, ProtectClock, restricted address families, syscall filtering) still eliminates capabilities and attack surface that container management doesn't need.
 
 ```bash
 # Check scores on a running node
@@ -269,158 +508,29 @@ nix run .#k8s-vm-ssh -- --node=cp0 systemd-analyze security
 nix run .#k8s-vm-ssh -- --node=cp0 systemd-analyze security etcd.service
 ```
 
-## TiDB Distributed SQL Database
+## Lifecycle Testing
 
-The cluster includes a highly available [TiDB](https://github.com/pingcap/tidb) deployment — a MySQL-compatible distributed SQL database. TiDB survives any single K8s node failure.
+### Per-Node Tests
 
-### TiDB Architecture
-
-```
-              ┌───────────────────────────────────────────────────────┐
-              │                    TiDB Cluster                       │
-              │                                                       │
-              │  ┌─────────┐  ┌─────────┐  ┌─────────┐              │
-              │  │  PD-0   │  │  PD-1   │  │  PD-2   │  Placement   │
-              │  │  (cp0)  │  │  (cp1)  │  │  (cp2)  │  Driver      │
-              │  └────┬────┘  └────┬────┘  └────┬────┘  (Raft       │
-              │       │            │            │        quorum)     │
-              │       └────────────┼────────────┘                    │
-              │                    │                                  │
-              │  ┌─────────┐  ┌───┴─────┐  ┌─────────┐              │
-              │  │ TiKV-0  │  │ TiKV-1  │  │ TiKV-2  │  Distributed │
-              │  │  (cp1)  │  │  (cp2)  │  │  (w3)   │  KV Storage  │
-              │  └─────────┘  └─────────┘  └─────────┘  (3-way      │
-              │                                          replication)│
-              │  ┌─────────┐  ┌─────────┐                           │
-              │  │ TiDB-0  │  │ TiDB-1  │  Stateless SQL Layer      │
-  MySQL ─────▶  │  (cp0)  │  │  (w3)   │  (MySQL protocol :4000)   │
-  clients     │  └─────────┘  └─────────┘                           │
-              └───────────────────────────────────────────────────────┘
-```
-
-- **PD** (Placement Driver): Cluster metadata and scheduling via Raft consensus. 3 instances for quorum — tolerates 1 PD failure.
-- **TiKV**: Distributed key-value storage with automatic 3-way Raft replication. 3 instances — data survives 1 TiKV failure.
-- **TiDB**: Stateless MySQL-compatible SQL layer. 2 instances — any single instance handles all queries.
-
-### HA Failure Analysis
-
-8 pods spread across 4 nodes with hard pod anti-affinity:
-
-| Node fails | PD quorum | TiKV replicas | TiDB SQL | Status |
-|------------|-----------|---------------|----------|--------|
-| cp0 dies | 2/3 (ok) | 3/3 (all alive) | 1/2 | Online |
-| cp1 dies | 2/3 (ok) | 2/3 (ok) | 2/2 | Online |
-| cp2 dies | 2/3 (ok) | 2/3 (ok) | 2/2 | Online |
-| w3 dies  | 3/3 (all) | 2/3 (ok) | 1/2 | Online |
-
-### Benchmark
-
-A sysbench Job is included in the manifests for OLTP read/write benchmarking:
+Each per-node test runs a VM in isolation through 9 phases with millisecond timing:
 
 ```bash
-# Generate manifests
-nix build .#k8s-manifests
-
-# Apply TiDB manifests to running cluster
-nix run .#k8s-vm-ssh -- --node=cp0 kubectl apply -f /path/to/tidb/
-
-# Watch pods come up (PD first, then TiKV, then TiDB)
-nix run .#k8s-vm-ssh -- --node=cp0 kubectl get pods -n tidb -w
-
-# Run the benchmark Job
-nix run .#k8s-vm-ssh -- --node=cp0 kubectl apply -f /path/to/tidb/job-bench.yaml
-nix run .#k8s-vm-ssh -- --node=cp0 kubectl logs -n tidb job/tidb-sysbench -f
-
-# Interactive MySQL access (from dev shell)
-mysql -h <node-ip> -P <nodeport> -u root -e "SELECT tidb_version();"
+nix run .#k8s-lifecycle-test-cp0    # Single node
+nix run .#k8s-lifecycle-test-all    # All 4 nodes sequentially
 ```
 
-Benchmark parameters: 4 tables, 10K rows each, 4 threads, 60-second OLTP read/write mix.
+| Phase | Name | What it checks |
+|-------|------|----------------|
+| 0 | Build | `nix build` succeeds |
+| 1 | Start | QEMU process starts |
+| 2/2b | Console | Serial (ttyS0) and virtio (hvc0) respond |
+| 3 | SSH | SSH is reachable |
+| 4 | Certs | PKI files present, CA chains validate (33 on CP, 10 on worker) |
+| 5 | Services | systemd services active (containerd) |
+| 6 | K8s Health | etcd + apiserver (requires cluster for quorum) |
+| 7/8 | Shutdown | Clean poweroff and process exit |
 
-## Examples
-
-### Building individual VMs
-
-```bash
-# Build a single node
-nix build .#k8s-microvm-cp0
-nix build .#k8s-microvm-w3
-
-# Run it directly (after network setup)
-./result/bin/microvm-run
-```
-
-### SSH into nodes
-
-```bash
-# Interactive shell on control plane
-nix run .#k8s-vm-ssh -- --node=cp0
-
-# Run a command on a worker
-nix run .#k8s-vm-ssh -- --node=w3 systemctl status kubelet
-
-# Check etcd health
-nix run .#k8s-vm-ssh -- --node=cp0 etcdctl \
-  --endpoints=https://127.0.0.1:2379 \
-  --cacert=/var/lib/kubernetes/pki/etcd-ca.crt \
-  --cert=/var/lib/kubernetes/pki/etcd-server.crt \
-  --key=/var/lib/kubernetes/pki/etcd-server.key \
-  endpoint health
-```
-
-### VM management
-
-```bash
-# List running VMs
-nix run .#k8s-vm-check
-
-# Stop all VMs (SIGTERM, then SIGKILL)
-nix run .#k8s-vm-stop
-
-# Connect to serial console for boot debugging
-socat -,rawer tcp:127.0.0.1:25500    # cp0 serial (ttyS0)
-socat -,rawer tcp:127.0.0.1:25501    # cp0 virtio (hvc0)
-socat -,rawer tcp:127.0.0.1:25510    # cp1 serial
-```
-
-### GitOps manifests
-
-```bash
-# Generate all K8s YAML manifests from Nix
-nix build .#k8s-manifests
-
-# Inspect the output
-ls result/
-cat result/cilium/values.yaml
-cat result/nginx/deployment.yaml
-cat result/clickhouse/statefulset.yaml
-```
-
-### Lifecycle testing
-
-```bash
-# Test a single node (build → boot → console → SSH → cert verify → services → k8s health → shutdown)
-nix run .#k8s-lifecycle-test-cp0
-nix run .#k8s-lifecycle-test-cp1
-nix run .#k8s-lifecycle-test-w3
-
-# Test all nodes sequentially
-nix run .#k8s-lifecycle-test-all
-```
-
-Each per-node lifecycle test verifies:
-- **Phase 0**: Nix build succeeds
-- **Phase 1**: QEMU process starts
-- **Phase 2/2b**: Serial (ttyS0) and virtio (hvc0) consoles respond
-- **Phase 3**: SSH is reachable
-- **Phase 4**: Certificate files present and CA chains validate (33 files on CP, 10 on worker)
-- **Phase 5**: systemd services active (containerd in per-node mode)
-- **Phase 6**: K8s health checks (etcd, apiserver — requires cluster for quorum)
-- **Phase 7/8**: Clean shutdown and process exit
-
-Note: Per-node tests run each VM in isolation. Services requiring the cluster (etcd, apiserver, kubelet) are only tested when all 3 CPs are running together, since etcd needs 2/3 quorum.
-
-#### Cluster-level test
+### Cluster Test
 
 The cluster test boots all 4 VMs together and verifies the K8s control plane forms correctly:
 
@@ -438,133 +548,82 @@ nix run .#k8s-cluster-test
 | C5 | Node Registration | 180s | `kubectl get nodes` shows 4 nodes registered |
 | C6 | Shutdown All | 60s | Graceful poweroff all VMs |
 
-The cluster test fills the gap between per-node infrastructure checks (VM boot, certs, containerd) and application-layer health (etcd quorum, apiserver, node registration). If any phase C1-C5 fails, the test still runs C6 to clean up VMs.
-
-Note: Nodes register as `NotReady` until a CNI plugin (Cilium) is deployed — this is expected K8s behavior. The test verifies registration, not CNI readiness.
-
-### Network management
-
-```bash
-# Check host prerequisites
-nix run .#k8s-check-host
-
-# Create network + haproxy LB (requires sudo)
-sudo nix run .#k8s-network-setup
-
-# Tear down network + haproxy (requires sudo)
-sudo nix run .#k8s-network-teardown
-```
-
-### Certificate inspection
-
-Certs are generated at Nix build time and embedded in VM images. For manual inspection:
-
-```bash
-# Copy build-time certs to ./certs/ for inspection
-nix run .#k8s-gen-certs
-
-# Inspect a cert
-openssl x509 -in ./certs/apiserver.crt -text -noout | grep -A1 "Subject Alternative Name"
-
-# Verify cert chain on a running node
-nix run .#k8s-vm-ssh -- --node=cp0 openssl verify \
-  -CAfile /var/lib/kubernetes/pki/ca.crt /var/lib/kubernetes/pki/apiserver.crt
-```
-
 ## File Structure
 
 ```
 flake.nix                        # Orchestrator — imports, mkK8sNode, packages, apps, devShell
 nix/
-├── constants.nix                # IPs, MACs, ports, serial ports, CIDRs, timeouts
+├── constants.nix                # IPs, MACs, ports, CIDRs, helm chart pins, timeouts
 ├── nodes.nix                    # Node definitions (cp0, cp1, cp2, w3) with role + services
 ├── microvm.nix                  # mkK8sNode parametric generator (TAP, dual serial, 9p store)
-├── k8s-module.nix               # NixOS module: etcd, apiserver, kubelet, containerd, scheduler
+├── k8s-module.nix               # NixOS module: etcd, apiserver, kubelet, containerd (v3 config)
+├── monitoring-module.nix        # NixOS module: Prometheus, Grafana, scrape targets
+├── gitops-bootstrap-module.nix  # NixOS module: first-boot oneshot (Cilium→CoreDNS→ArgoCD→Apps)
 ├── network-setup.nix            # Bridge + TAP + NAT + haproxy LB setup/teardown
 ├── certs.nix                    # Build-time PKI: 3 CAs + per-component certs, baked into VMs
 ├── cert-inject.nix              # Legacy: expect-driven cert transfer over virtio (manual use)
-├── microvm-scripts.nix          # k8s-vm-check, k8s-vm-stop, k8s-vm-ssh, k8s-start-all
-├── shell.nix                    # devShell: kubectl, helm, cilium-cli, step-cli, argocd, ...
+├── microvm-scripts.nix          # VM management: check, stop, ssh, start-all, wipe, rebuild
+├── render-script.nix            # Rendered manifests → nix run .#k8s-render-manifests
+├── shell.nix                    # devShell: kubectl, helm, cilium-cli, hubble, argocd, ...
 ├── test-lib.nix                 # Shared bash helpers (color, timing, assertions)
 ├── lifecycle/
-│   ├── default.nix              # Lifecycle test orchestrator (per-node + test-all)
+│   ├── default.nix              # Lifecycle test orchestrator (per-node + test-all + cluster)
 │   ├── lib.nix                  # Script generators (process, console, SSH, timing helpers)
 │   ├── constants.nix            # Per-node services, health checks, timeouts
-│   ├── k8s-checks.nix           # K8s verification (etcd health, apiserver /healthz, nodes Ready)
+│   ├── k8s-checks.nix           # K8s verification (etcd, apiserver, node registration)
 │   └── scripts/
 │       ├── vm-lib.exp           # Shared expect library (login, run_cmd, retry)
-│       ├── vm-cert-inject.exp   # Cert transfer over virtio console (base64 + md5 verify)
+│       ├── vm-cert-inject.exp   # Cert transfer over virtio console
 │       └── vm-k8s-verify.exp    # K8s service verification via console
 └── gitops/
-    ├── default.nix              # Manifest generator → nix build .#k8s-manifests
+    ├── default.nix              # Manifest aggregator (handles both inline YAML and helm source)
+    ├── helm-chart.nix           # Generic helm template helper (fetchurl + extract + render)
     └── env/
-        ├── base.nix             # Namespaces, RBAC
-        ├── argocd.nix           # ArgoCD Helm chart + self-managing Application
-        ├── cilium.nix           # Cilium Helm chart (kube-proxy replacement, dual-stack, Hubble)
-        ├── clickhouse.nix       # ClickHouse StatefulSet + headless Service + ConfigMap
-        ├── nginx.nix            # Nginx Deployment + Service (hello world)
-        └── tidb.nix             # TiDB HA cluster (3 PD + 3 TiKV + 2 TiDB + sysbench Job)
+        ├── base.nix             # Namespaces, RBAC, CoreDNS
+        ├── argocd.nix           # ArgoCD Helm chart (v9.5.0) + self-managing Application
+        ├── cilium.nix           # Cilium Helm chart (v1.19.3) + Hubble + Application
+        ├── clickhouse.nix       # ClickHouse 3 Keeper + 2x2 shards + Application
+        ├── foundationdb.nix     # FoundationDB 3 coord + 4 storage + benchmark + Application
+        ├── nginx.nix            # Nginx hello-world + Application
+        └── tidb.nix             # TiDB HA cluster (disabled, reference only)
+rendered/                        # Committed rendered manifests (git-tracked)
+├── argocd/                      # ArgoCD install.yaml (helm-rendered), values, Application CR
+├── base/                        # Namespaces, RBAC, CoreDNS
+├── cilium/                      # Cilium install.yaml (helm-rendered), values, Application CR
+├── clickhouse/                  # ClickHouse manifests
+├── fdb/                         # FoundationDB manifests + benchmark
+└── nginx/                       # Nginx manifests
 ```
-
-## Component Details
-
-### microvm.nix — VM Generator
-Parametric function `mkK8sNode { nodeName, role }` that produces a `microvm.declaredRunner`. Each VM gets:
-- TAP networking with per-node MAC address
-- Dual serial console: ttyS0 (TCP, early boot) + hvc0 (virtio, high-speed)
-- 9p /nix/store share (read-only)
-- systemd-networkd for dual-stack static IP
-- Build-time PKI bundle deployed via NixOS activation script
-- Resources: 4GB/4vCPU (control planes), 3GB/2vCPU (worker)
-
-### k8s-module.nix — NixOS Module
-`services.k8s` module configuring:
-- **containerd** with systemd cgroup driver
-- **kubelet** with dual-stack node-ip, containerd CRI endpoint, kubeconfig pointing to haproxy VIP
-- **etcd** with TLS peer/client auth, 3-node cluster (control plane only)
-- **kube-apiserver** with Node+RBAC authorization, etcd mTLS (control plane only)
-- **kube-controller-manager** with leader election (control plane only)
-- **kube-scheduler** with leader election (control plane only)
-- Kernel modules: br_netfilter, overlay, ip_vs, nf_conntrack
-- Sysctl: IP forwarding, bridge-nf-call-iptables
-- No kube-proxy — Cilium handles it via eBPF
-
-### certs.nix — Build-Time PKI
-All certificates are generated at `nix build` time and baked directly into VM images:
-- `pkiStore`: Nix derivation producing all certs (3 CAs, per-node certs, SA keypair) using step-cli and openssl
-- `mkNodePki`: Assembles per-node bundles (certs + kubeconfigs) for embedding in VMs
-- `genCerts`: Convenience script to copy build-time certs to `./certs/` for inspection
-- No runtime cert injection needed — the `microvm.nix` activation script copies certs from `/nix/store` to `/var/lib/kubernetes/pki/` at boot
-- All kubeconfigs target `https://10.33.33.1:6443` (haproxy VIP) for HA
-
-### lifecycle/ — Test Framework
-Per-node lifecycle test covering 9 phases: build → start → serial → virtio → SSH → cert verify → services → K8s health → shutdown → exit. Millisecond timing, colored output, summary table. `k8s-lifecycle-test-all` runs all nodes sequentially.
-
-### gitops/ — Manifest Generator
-Generates Kubernetes YAML from Nix:
-- **ArgoCD**: Helm chart values + self-managing Application CR
-- **Cilium**: kube-proxy replacement, dual-stack, Hubble observability, uses haproxy VIP for k8sServiceHost
-- **TiDB**: HA distributed SQL database (3 PD + 3 TiKV + 2 TiDB), sysbench benchmark Job
-- **ClickHouse**: StatefulSet with headless Service + ConfigMap
-- **nginx**: Deployment with hello-world page
 
 ## Design Decisions
 
 | Decision | Rationale |
 |----------|-----------|
+| Helm template at Nix build time | ArgoCD applies plain YAML — no in-cluster Helm, no chart pulls |
+| Bootstrap systemd oneshot on cp0 | Bootstraps Cilium→CoreDNS→ArgoCD→Apps in order; baked into Nix store (no git fetch before CNI is up) |
+| CoreDNS in base manifests | Required for in-cluster DNS (service discovery, hubble-relay peer resolution) |
+| containerd v3 config | Matches containerd 2.x native format (split CRI plugin paths) |
 | TAP-only networking | Nodes must communicate for etcd peering and kubelet registration |
 | 3 CP + haproxy LB | 3-node etcd quorum tolerates 1 CP failure; haproxy on bridge IP provides apiserver HA |
 | Host-side haproxy (not Cilium) | Apiserver endpoint must exist before Cilium boots (chicken-and-egg) |
-| step-cli for CA | Cleaner `--san` flags vs cfssl JSON CSRs, path to step-ca auto-renewal |
 | Build-time PKI | Certs baked into VM images via Nix — no runtime injection, fully reproducible |
 | 3 separate CAs | Isolates trust domains: cluster, etcd, and front-proxy (K8s best practice) |
-| Kubeconfigs → haproxy VIP | All components connect via LB, not directly to a single CP |
 | Cilium replaces kube-proxy | eBPF-based, no iptables overhead, native dual-stack |
-| containerd (not CRI-O) | Better NixOS/nixpkgs support, k8s default runtime |
-| Dual serial consoles | ttyS0 for early boot debugging, hvc0 for high-speed data transfer |
-| Per-node cert bundles | Workers get 10 files (no etcd/apiserver keys), CPs get 33 — least privilege |
-| systemd hardening | Control plane services get CapabilityBoundingSet="" (score 1.7); kubelet/containerd keep only caps needed for container lifecycle (score 5.7) |
-| TimeoutStopSec=15 | All K8s services stop within 15s on shutdown — prevents hung etcd peer reconnection from blocking VM exit |
-| TiDB plain StatefulSets | Matches existing gitops pattern, no operator overhead, direct control over pod placement |
-| TiDB 3 PD + 3 TiKV + 2 TiDB | Survives any single node failure: PD quorum (2/3), TiKV replication (2/3), stateless SQL (1/2) |
-| 4GB CPs, 3GB worker | Headroom for TiDB components (~768Mi per node) alongside K8s services |
+| Pinned chart hashes | Reproducible builds — chart tarballs fetched with SRI hash verification |
+| `directory.exclude` on Application CRs | Prevents ArgoCD from self-applying its own Application CR file |
+| Wipe/rebuild scripts | Easy to tear down and recreate the cluster from scratch for testing |
+| systemd hardening | Control plane: CapabilityBoundingSet="" (score 1.7); kubelet/containerd: minimum caps for container lifecycle (score 5.7) |
+| 8GB CPs, 6GB worker | Headroom for ArgoCD, ClickHouse, FDB alongside K8s services |
+
+## Teardown
+
+```bash
+# Stop all VMs
+nix run .#k8s-vm-stop
+
+# Remove network infrastructure
+sudo nix run .#k8s-network-teardown
+
+# Full cleanup (VMs + data images)
+nix run .#k8s-vm-wipe
+```

@@ -1,0 +1,89 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fdb-bench
+  namespace: fdb
+data:
+  bench.sh: |
+    #!/bin/bash
+    set -eu
+    CLUSTER=/var/fdb/fdb.cluster
+    ROWS=40000
+    WORKERS=4
+    DURATION=60
+    TXNS_PER_BATCH=50
+    OPS_PER_TXN=13
+
+    echo "=== Loading $ROWS keys ==="
+    T0=$(date +%s)
+    BATCH=500
+    for start in $(seq 0 $BATCH $((ROWS - 1))); do
+      (echo 'writemode on'; echo 'begin';
+       end=$((start + BATCH))
+       [ $end -gt $ROWS ] && end=$ROWS
+       for i in $(seq $start $((end - 1))); do
+         printf 'set k%08d v_loaded_%08d_xxxxxxxxxxxxxxxxxxxx\n' $i $i
+       done
+       echo 'commit') | fdbcli -C $CLUSTER > /dev/null
+    done
+    T1=$(date +%s)
+    echo "  loaded in $((T1 - T0))s"
+    echo ''
+
+    echo "=== Running: $WORKERS workers, $DURATION s, mix=g10u2i1 ==="
+    TMPDIR=$(mktemp -d)
+    RUN_START=$(date +%s)
+    DEADLINE=$((RUN_START + DURATION))
+
+    gen_batch() {
+      local worker=$1 pass=$2
+      echo 'writemode on'
+      for t in $(seq 1 $TXNS_PER_BATCH); do
+        echo 'begin'
+        for _ in 1 2 3 4 5 6 7 8 9 10; do
+          printf 'get k%08d\n' $((RANDOM * ROWS / 32768))
+        done
+        for _ in 1 2; do
+          printf 'set k%08d updated_%d_%d_%d_xxxxxxxx\n' $((RANDOM * ROWS / 32768)) $worker $pass $t
+        done
+        printf 'set ins_w%d_p%d_t%d val_xxxxxxxxxxxxxxxxxxxxxxxxxx\n' $worker $pass $t
+        echo 'commit'
+      done
+    }
+
+    for w in $(seq 1 $WORKERS); do
+      (
+        txns=0
+        pass=0
+        while [ $(date +%s) -lt $DEADLINE ]; do
+          gen_batch $w $pass | fdbcli -C $CLUSTER > /dev/null 2>&1
+          txns=$((txns + TXNS_PER_BATCH))
+          pass=$((pass + 1))
+        done
+        echo $txns > $TMPDIR/w$w
+      ) &
+    done
+    wait
+    RUN_END=$(date +%s)
+    ELAPSED=$((RUN_END - RUN_START))
+
+    TOTAL_TXNS=0
+    for w in $(seq 1 $WORKERS); do
+      T=$(cat $TMPDIR/w$w)
+      TOTAL_TXNS=$((TOTAL_TXNS + T))
+      echo "  worker $w: $T txns"
+    done
+    TOTAL_OPS=$((TOTAL_TXNS * OPS_PER_TXN))
+    TPS=$(awk -v t=$TOTAL_TXNS -v e=$ELAPSED 'BEGIN{printf "%.2f", t/e}')
+    OPS=$(awk -v o=$TOTAL_OPS -v e=$ELAPSED 'BEGIN{printf "%.2f", o/e}')
+    AVG_LAT=$(awk -v t=$TOTAL_TXNS -v w=$WORKERS -v e=$ELAPSED 'BEGIN{if(t>0) printf "%.2f", (e*w*1000)/t; else print "n/a"}')
+
+    echo ''
+    echo '=== Results ==='
+    printf '  duration:      %d s\n' $ELAPSED
+    printf '  transactions:  %d (%s/s)\n' $TOTAL_TXNS $TPS
+    printf '  operations:    %d (%s/s)\n' $TOTAL_OPS $OPS
+    printf '  avg latency:   %s ms (derived: elapsed*workers/txns)\n' $AVG_LAT
+    echo ''
+    echo '=== FDB status after run ==='
+    fdbcli -C $CLUSTER --exec 'status'

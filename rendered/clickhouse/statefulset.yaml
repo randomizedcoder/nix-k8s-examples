@@ -1,0 +1,92 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: clickhouse
+  namespace: clickhouse
+spec:
+  serviceName: clickhouse-headless
+  replicas: 4
+  selector:
+    matchLabels:
+      app: clickhouse
+  template:
+    metadata:
+      labels:
+        app: clickhouse
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels:
+                app: clickhouse
+            topologyKey: kubernetes.io/hostname
+      initContainers:
+      - name: macros
+        image: clickhouse/clickhouse-server:24.3
+        command: ["/bin/sh", "/scripts/init-macros.sh"]
+        env:
+        - name: HOSTNAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        volumeMounts:
+        - name: scripts
+          mountPath: /scripts
+        - name: macros-out
+          mountPath: /macros-out
+      securityContext:
+        runAsUser: 0
+      containers:
+      - name: clickhouse
+        image: clickhouse/clickhouse-server:24.3
+        # Wrap launch to compute POD_FQDN for interserver_http_host:
+        # downward API can't give us fully-qualified DNS, but replicas
+        # must advertise a name peers can reach.
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          export POD_FQDN="$(hostname).clickhouse-headless.clickhouse.svc.cluster.local"
+          exec /usr/bin/clickhouse-server --config-file=/etc/clickhouse-server/config.xml
+        ports:
+        - containerPort: 8123
+          name: http
+        - containerPort: 9000
+          name: native
+        - containerPort: 9009
+          name: interserver
+        volumeMounts:
+        - name: config
+          mountPath: /etc/clickhouse-server/config.d/cluster.xml
+          subPath: cluster.xml
+        - name: macros-out
+          mountPath: /etc/clickhouse-server/config.d/macros.xml
+          subPath: macros.xml
+        - name: data
+          mountPath: /var/lib/clickhouse
+        resources:
+          requests:
+            cpu: 200m
+            memory: 512Mi
+          limits:
+            cpu: '1'
+            memory: 2Gi
+      volumes:
+      - name: config
+        configMap:
+          name: clickhouse-config
+          items:
+          - key: cluster.xml
+            path: cluster.xml
+      - name: scripts
+        configMap:
+          name: clickhouse-config
+          defaultMode: 0755
+          items:
+          - key: init-macros.sh
+            path: init-macros.sh
+      - name: macros-out
+        emptyDir: {}
+      - name: data
+        emptyDir: {}
+

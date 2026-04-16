@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: clickhouse-keeper
+  namespace: clickhouse
+spec:
+  serviceName: ck-keeper-headless
+  replicas: 3
+  selector:
+    matchLabels:
+      app: clickhouse-keeper
+  template:
+    metadata:
+      labels:
+        app: clickhouse-keeper
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels:
+                app: clickhouse-keeper
+            topologyKey: kubernetes.io/hostname
+      securityContext:
+        runAsUser: 0
+      containers:
+      - name: keeper
+        image: clickhouse/clickhouse-keeper:24.3
+        # server_id = ordinal + 1 (matches raft_configuration ids 1..3)
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          ordinal=${HOSTNAME##*-}
+          export KEEPER_SERVER_ID=$((ordinal + 1))
+          exec /usr/bin/clickhouse-keeper --config=/etc/clickhouse-keeper/keeper_config.xml
+        env:
+        - name: HOSTNAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        ports:
+        - containerPort: 9181
+          name: client
+        - containerPort: 9234
+          name: raft
+        volumeMounts:
+        - name: config
+          mountPath: /etc/clickhouse-keeper/keeper_config.xml
+          subPath: keeper_config.xml
+        - name: data
+          mountPath: /var/lib/clickhouse-keeper
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+      volumes:
+      - name: config
+        configMap:
+          name: ck-keeper-config
+      - name: data
+        emptyDir: {}
+

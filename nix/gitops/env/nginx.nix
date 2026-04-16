@@ -3,6 +3,9 @@
 # Nginx Deployment + Service + ConfigMap (hello world).
 #
 { pkgs, lib }:
+let
+  constants = import ../../constants.nix;
+in
 {
   manifests = [
     {
@@ -77,6 +80,31 @@
           - port: 80
             targetPort: 80
           type: NodePort
+      '';
+    }
+    {
+      name = "nginx/application.yaml";
+      content = ''
+        apiVersion: argoproj.io/v1alpha1
+        kind: Application
+        metadata:
+          name: nginx
+          namespace: argocd
+        spec:
+          project: default
+          source:
+            repoURL: ${constants.gitops.repoURL}
+            targetRevision: ${constants.gitops.targetRevision}
+            path: ${constants.gitops.renderedPath}/nginx
+            directory:
+              exclude: 'application.yaml'
+          destination:
+            server: https://kubernetes.default.svc
+            namespace: nginx
+          syncPolicy:
+            automated:
+              prune: true
+              selfHeal: true
       '';
     }
   ];

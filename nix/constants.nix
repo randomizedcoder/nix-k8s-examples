@@ -102,6 +102,64 @@ rec {
     };
   };
 
+  # ─── Observability ─────────────────────────────────────────────────
+  nodeExporter = {
+    port = 9100;
+    listenAddress = "0.0.0.0";  # firewall disabled; bridge reachable
+  };
+
+  prometheus = {
+    port = 9090;
+    retentionTime = "15d";
+    # Host that runs the Prometheus server (scrapes all nodes).
+    host = "cp0";
+  };
+
+  grafana = {
+    port = 3000;
+    adminUser = "admin";
+    adminPassword = "admin";  # test cluster — consistent with ssh password "k8s"
+    secretKey = "SW2YcwTIb9zpOOhoPsMm";  # test cluster — legacy Grafana default
+    # Pinned rfmoz/grafana-dashboards (Node Exporter Full dashboard).
+    dashboardsRepo = {
+      owner = "rfmoz";
+      repo = "grafana-dashboards";
+      rev = "fa9f41fa3efed31d5c2de73cd332a340797c0ec7";
+      hash = "sha256-phqtDu/oLwqB+R+Dn9WyHyYbNcKR43uIy+F3BrAvwg4=";
+    };
+  };
+
+  hubble = {
+    uiNodePort    = 31234;  # Hubble UI (HTTP)
+    relayNodePort = 31245;  # Hubble Relay gRPC (for `hubble` CLI)
+    # Metrics ports live on cilium-agent's host network (hostNetwork=true).
+    agentMetricsPort    = 9962;
+    operatorMetricsPort = 9963;
+    hubbleMetricsPort   = 9965;
+  };
+
+  # ─── Helm chart pins (rendered at Nix build time) ──────────────────
+  # Update these by running:
+  #   nix-prefetch-url --type sha256 <url>
+  #   nix hash convert --hash-algo sha256 --to sri <raw>
+  helmCharts = {
+    cilium = {
+      version = "1.19.3";
+      url     = "https://helm.cilium.io/cilium-1.19.3.tgz";
+      hash    = "sha256-yOBd+eq/kBnmL1ED4fNYFLTxtDkW+IUZ5a5ONsaapCs=";
+    };
+    argocd = {
+      version = "9.5.0";  # appVersion v3.3.6
+      url     = "https://github.com/argoproj/argo-helm/releases/download/argo-cd-9.5.0/argo-cd-9.5.0.tgz";
+      hash    = "sha256-2u2U/iCgJ3LFh4w2dKSXbaLF2au5oeIDVpkYnCnfjgk=";
+    };
+  };
+
+  # ─── ArgoCD service (NodePort reachable from host) ─────────────────
+  argocd = {
+    nodePortHttps = 30443;
+  };
+
   # ─── SSH Configuration ─────────────────────────────────────────────
   ssh = {
     password = "k8s";
@@ -131,6 +189,13 @@ rec {
       ciliumReady = 120;
       workloadsReady = 120;
     };
+  };
+
+  # ─── GitOps Configuration ────────────────────────────────────────────
+  gitops = {
+    repoURL = "https://github.com/randomizedcoder/nix-k8s-examples.git";
+    targetRevision = "main";
+    renderedPath = "rendered";
   };
 
   # ─── Helper Functions ──────────────────────────────────────────────

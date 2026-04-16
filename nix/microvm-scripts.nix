@@ -6,8 +6,10 @@
 let
   constants = import ./constants.nix;
 
-  # Pattern to identify our K8s MicroVMs in process list
-  vmPattern = "process=k8s-(cp0|cp1|cp2|w3)";
+  # Pattern to identify our K8s MicroVMs by process name.
+  # QEMU's -name flag sets the process name, so use pgrep -x (exact match)
+  # to avoid false positives from pgrep matching its own cmdline.
+  vmPattern = "k8s-(cp0|cp1|cp2|w3)";
 in
 {
   check = pkgs.writeShellApplication {
@@ -17,10 +19,10 @@ in
       echo "=== K8s MicroVM Processes ==="
       echo
 
-      if pgrep -af '${vmPattern}'; then
+      if pgrep -ax '${vmPattern}'; then
         echo
         echo "=== Count ==="
-        pgrep -cf '${vmPattern}'
+        pgrep -cx '${vmPattern}'
       else
         echo "(none running)"
         echo
@@ -36,23 +38,23 @@ in
     text = ''
       echo "=== Stopping K8s MicroVMs ==="
 
-      if ! pgrep -f '${vmPattern}' > /dev/null; then
+      if ! pgrep -x '${vmPattern}' > /dev/null; then
         echo "No K8s MicroVMs running."
         exit 0
       fi
 
       echo "Found processes:"
-      pgrep -af '${vmPattern}'
+      pgrep -ax '${vmPattern}'
 
       echo
       echo "Sending SIGTERM..."
-      pkill -f '${vmPattern}' || true
+      pkill -x '${vmPattern}' || true
 
       sleep 2
 
-      if pgrep -f '${vmPattern}' > /dev/null; then
+      if pgrep -x '${vmPattern}' > /dev/null; then
         echo "Processes still running, sending SIGKILL..."
-        pkill -9 -f '${vmPattern}' || true
+        pkill -9 -x '${vmPattern}' || true
       fi
 
       echo "Done."
@@ -98,6 +100,59 @@ in
         -o UserKnownHostsFile=/dev/null \
         -o LogLevel=ERROR \
         "root@$HOST" "''${PASSTHROUGH_ARGS[@]}"
+    '';
+  };
+
+  wipe = pkgs.writeShellApplication {
+    name = "k8s-vm-wipe";
+    runtimeInputs = with pkgs; [ procps coreutils ];
+    text = ''
+      echo "=== Stopping K8s MicroVMs ==="
+      if pgrep -x '${vmPattern}' > /dev/null; then
+        pkill -x '${vmPattern}' || true
+        sleep 2
+        if pgrep -x '${vmPattern}' > /dev/null; then
+          pkill -9 -x '${vmPattern}' || true
+          sleep 1
+        fi
+      fi
+
+      echo ""
+      echo "=== Removing per-VM data images (etcd / containerd / kubelet state) ==="
+      REMOVED=0
+      for node in ${builtins.concatStringsSep " " constants.nodeNames}; do
+        img="k8s-$node-data.img"
+        if [ -f "$img" ]; then
+          rm -f "$img"
+          echo "  removed $img"
+          REMOVED=$((REMOVED + 1))
+        fi
+      done
+
+      echo ""
+      if [ "$REMOVED" -eq 0 ]; then
+        echo "No data images found. Nothing to wipe."
+      else
+        echo "Wiped $REMOVED data image(s)."
+      fi
+    '';
+  };
+
+  clusterRebuild = pkgs.writeShellApplication {
+    name = "k8s-cluster-rebuild";
+    runtimeInputs = with pkgs; [ nix coreutils ];
+    text = ''
+      echo "=== Wipe ==="
+      nix run .#k8s-vm-wipe
+
+      echo ""
+      echo "=== Start ==="
+      nix run .#k8s-start-all
+
+      echo ""
+      echo "Bootstrap runs on cp0 in the background."
+      echo "Watch progress with:"
+      echo "  nix run .#k8s-vm-ssh -- --node=cp0 journalctl -fu k8s-gitops-bootstrap"
     '';
   };
 
