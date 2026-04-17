@@ -30,6 +30,9 @@ let
     ipv6:
       enabled: true
 
+    bpf:
+      masquerade: true
+
     # ─── Hubble: flow visibility, UI, metrics ───────────────────────
     hubble:
       enabled: true
