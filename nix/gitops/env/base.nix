@@ -98,7 +98,6 @@ in
                     max_concurrent 1000
                 }
                 cache 30
-                loop
                 reload
                 loadbalance
             }

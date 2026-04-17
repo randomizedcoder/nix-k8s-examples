@@ -198,6 +198,7 @@ data:
   enable-ipv6-masquerade: "true"
   enable-tcx: "true"
   datapath-mode: "veth"
+  enable-bpf-masquerade: "true"
   enable-masquerade-to-route-source: "false"
 
   enable-xt-socket-fallback: "true"
