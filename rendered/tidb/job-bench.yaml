@@ -1,0 +1,43 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: tidb-sysbench
+  namespace: tidb
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app: tidb-bench
+    spec:
+      restartPolicy: Never
+      initContainers:
+      - name: wait-for-tidb
+        image: busybox:1.36
+        command: ['sh', '-c', 'until wget -qO- http://tidb.tidb.svc.cluster.local:10080/status 2>/dev/null; do echo waiting for TiDB; sleep 5; done']
+      - name: create-db
+        image: mariadb:11
+        command: ['sh', '-c', 'mariadb -h tidb.tidb.svc.cluster.local -P 4000 -u root -e "CREATE DATABASE IF NOT EXISTS sbtest;"']
+      containers:
+      - name: sysbench
+        image: severalnines/sysbench:latest
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          set -e
+          TIDB_HOST=tidb.tidb.svc.cluster.local
+          TIDB_PORT=4000
+          echo '=== Preparing sysbench data (4 tables x 10K rows) ==='
+          sysbench oltp_read_write --mysql-host=$TIDB_HOST --mysql-port=$TIDB_PORT --mysql-user=root --mysql-db=sbtest --tables=4 --table-size=10000 --threads=4 prepare
+          echo ''
+          echo '=== Running OLTP read/write benchmark (60s) ==='
+          sysbench oltp_read_write --mysql-host=$TIDB_HOST --mysql-port=$TIDB_PORT --mysql-user=root --mysql-db=sbtest --tables=4 --table-size=10000 --threads=4 --time=60 --report-interval=10 run
+          echo ''
+          echo '=== Cleanup ==='
+          sysbench oltp_read_write --mysql-host=$TIDB_HOST --mysql-port=$TIDB_PORT --mysql-user=root --mysql-db=sbtest --tables=4 cleanup
+          echo ''
+          echo '=== Benchmark complete ==='
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi

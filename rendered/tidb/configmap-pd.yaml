@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pd-config
+  namespace: tidb
+data:
+  start-pd.sh: |
+    #!/bin/sh
+    set -e
+    HOSTNAME=$(hostname)
+    exec /pd-server \
+      --name=${HOSTNAME} \
+      --data-dir=/data/pd \
+      --client-urls=http://0.0.0.0:2379 \
+      --peer-urls=http://0.0.0.0:2380 \
+      --advertise-client-urls=http://${HOSTNAME}.pd-headless.tidb.svc.cluster.local:2379 \
+      --advertise-peer-urls=http://${HOSTNAME}.pd-headless.tidb.svc.cluster.local:2380 \
+      --initial-cluster=pd-0=http://pd-0.pd-headless.tidb.svc.cluster.local:2380,pd-1=http://pd-1.pd-headless.tidb.svc.cluster.local:2380,pd-2=http://pd-2.pd-headless.tidb.svc.cluster.local:2380

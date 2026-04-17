@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: tikv
+  namespace: tidb
+spec:
+  serviceName: tikv-headless
+  # 4 TiKV replicas across cp0/cp1/cp2/w3. PD places 3-replica Raft
+  # groups per region and uses the 4th node as a rebalance target →
+  # node failure leaves regions fully replicated.
+  replicas: 4
+  selector:
+    matchLabels:
+      app: tikv
+  template:
+    metadata:
+      labels:
+        app: tikv
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels:
+                app: tikv
+            topologyKey: kubernetes.io/hostname
+      initContainers:
+      - name: wait-for-pd
+        image: busybox:1.36
+        command: ['sh', '-c', 'until wget -qO- http://pd-0.pd-headless.tidb.svc.cluster.local:2379/pd/api/v1/health 2>/dev/null; do echo waiting for PD; sleep 2; done']
+      containers:
+      - name: tikv
+        image: pingcap/tikv:v8.5.0
+        command: ["/bin/sh", "/config/start-tikv.sh"]
+        ports:
+        - containerPort: 20160
+          name: grpc
+        - containerPort: 20180
+          name: status
+        volumeMounts:
+        - name: config
+          mountPath: /config
+        - name: data
+          mountPath: /data/tikv
+        resources:
+          requests:
+            cpu: 200m
+            memory: 512Mi
+          limits:
+            cpu: '1'
+            memory: 2Gi
+      volumes:
+      - name: config
+        configMap:
+          name: tikv-config
+          defaultMode: 0755
+      - name: data
+        emptyDir: {}

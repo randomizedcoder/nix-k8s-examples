@@ -87,7 +87,7 @@ nix run .#k8s-vm-ssh -- --node=cp0 kubectl -n argocd get applications
 |---------|-----|-------|
 | ArgoCD UI | `https://10.33.33.10:30443` | NodePort (any node IP works) |
 
-ArgoCD manages 6 Applications (cilium, argocd, base, clickhouse, foundationdb, nginx) via the rendered manifests pattern. After first boot, ArgoCD is the source of truth via git.
+ArgoCD manages 7 Applications (cilium, argocd, base, clickhouse, foundationdb, nginx, tidb) via the rendered manifests pattern. After first boot, ArgoCD is the source of truth via git.
 
 ```bash
 # Get the initial admin password
@@ -125,6 +125,15 @@ hubble --server 10.33.33.10:31245 observe --last 20
 | Cilium Agent metrics | `:9962` on all nodes | Prometheus scrape target |
 | Cilium Operator metrics | `:9963` | Single instance |
 | Hubble metrics | `:9965` on all nodes | Flow metrics |
+
+### TiDB (Distributed SQL)
+
+| Service | URL | Notes |
+|---------|-----|-------|
+| TiDB (MySQL protocol) | `mysql -h 10.33.33.10 -P <nodeport> -u root` | NodePort (any node IP) |
+| PD Dashboard | `http://pd.tidb.svc.cluster.local:2379/dashboard` | In-cluster only |
+
+TiDB provides a MySQL-compatible distributed SQL database with 3 PD nodes (Raft metadata), 4 TiKV storage nodes, and 2 stateless TiDB SQL servers. A sysbench benchmark job runs automatically after deployment.
 
 ### SSH
 
@@ -293,6 +302,7 @@ nix run .#k8s-render-manifests -- --check
 | **ArgoCD** | Helm-rendered | GitOps controller, self-managing via path-source Application |
 | **ClickHouse** | Plain YAML | 3 Keeper (Raft) + 2 shards x 2 replicas, ReplicatedMergeTree |
 | **FoundationDB** | Plain YAML | 3 coordinators + 4 storage, triple-ssd replication, benchmark |
+| **TiDB** | Plain YAML | 3 PD + 4 TiKV + 2 TiDB, MySQL-compatible distributed SQL, sysbench |
 | **nginx** | Plain YAML | Hello-world deployment + NodePort service |
 
 ## Certificate Architecture (PKI)
@@ -585,14 +595,15 @@ nix/
         ├── clickhouse.nix       # ClickHouse 3 Keeper + 2x2 shards + Application
         ├── foundationdb.nix     # FoundationDB 3 coord + 4 storage + benchmark + Application
         ├── nginx.nix            # Nginx hello-world + Application
-        └── tidb.nix             # TiDB HA cluster (disabled, reference only)
+        └── tidb.nix             # TiDB 3 PD + 4 TiKV + 2 TiDB + sysbench + Application
 rendered/                        # Committed rendered manifests (git-tracked)
 ├── argocd/                      # ArgoCD install.yaml (helm-rendered), values, Application CR
 ├── base/                        # Namespaces, RBAC, CoreDNS
 ├── cilium/                      # Cilium install.yaml (helm-rendered), values, Application CR
 ├── clickhouse/                  # ClickHouse manifests
 ├── fdb/                         # FoundationDB manifests + benchmark
-└── nginx/                       # Nginx manifests
+├── nginx/                       # Nginx manifests
+└── tidb/                        # TiDB PD + TiKV + TiDB + sysbench manifests
 ```
 
 ## Design Decisions

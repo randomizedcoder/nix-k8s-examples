@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: pd
+  namespace: tidb
+spec:
+  serviceName: pd-headless
+  replicas: 3
+  selector:
+    matchLabels:
+      app: pd
+  template:
+    metadata:
+      labels:
+        app: pd
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels:
+                app: pd
+            topologyKey: kubernetes.io/hostname
+      containers:
+      - name: pd
+        image: pingcap/pd:v8.5.0
+        command: ["/bin/sh", "/config/start-pd.sh"]
+        ports:
+        - containerPort: 2379
+          name: client
+        - containerPort: 2380
+          name: peer
+        volumeMounts:
+        - name: config
+          mountPath: /config
+        - name: data
+          mountPath: /data/pd
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+      volumes:
+      - name: config
+        configMap:
+          name: pd-config
+          defaultMode: 0755
+      - name: data
+        emptyDir: {}

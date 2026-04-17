@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: tikv-headless
+  namespace: tidb
+spec:
+  clusterIP: None
+  selector:
+    app: tikv
+  ports:
+  - name: grpc
+    port: 20160
+    targetPort: 20160
+  - name: status
+    port: 20180
+    targetPort: 20180

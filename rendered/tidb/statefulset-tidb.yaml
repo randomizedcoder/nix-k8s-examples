@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: tidb
+  namespace: tidb
+spec:
+  serviceName: tidb-headless
+  replicas: 2
+  selector:
+    matchLabels:
+      app: tidb-server
+  template:
+    metadata:
+      labels:
+        app: tidb-server
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels:
+                app: tidb-server
+            topologyKey: kubernetes.io/hostname
+      initContainers:
+      - name: wait-for-pd
+        image: busybox:1.36
+        command: ['sh', '-c', 'until wget -qO- http://pd-0.pd-headless.tidb.svc.cluster.local:2379/pd/api/v1/health 2>/dev/null; do echo waiting for PD; sleep 2; done']
+      containers:
+      - name: tidb
+        image: pingcap/tidb:v8.5.0
+        command: ["/bin/sh", "/config/start-tidb.sh"]
+        ports:
+        - containerPort: 4000
+          name: mysql
+        - containerPort: 10080
+          name: status
+        volumeMounts:
+        - name: config
+          mountPath: /config
+        resources:
+          requests:
+            cpu: 200m
+            memory: 256Mi
+          limits:
+            cpu: '1'
+            memory: 512Mi
+      volumes:
+      - name: config
+        configMap:
+          name: tidb-config
+          defaultMode: 0755
