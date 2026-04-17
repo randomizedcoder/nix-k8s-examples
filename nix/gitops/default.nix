@@ -22,15 +22,13 @@ let
   cilium     = import (envDir + "/cilium.nix")       { inherit pkgs lib helm; };
   clickhouse = import (envDir + "/clickhouse.nix")   { inherit pkgs lib; };
   nginx      = import (envDir + "/nginx.nix")        { inherit pkgs lib; };
-  # TiDB disabled in favour of FoundationDB for financial-workload suitability.
-  # Re-enable by uncommenting the import and the `tidb.manifests` concat below.
-  # tidb = import (envDir + "/tidb.nix") { inherit pkgs lib; };
+  tidb       = import (envDir + "/tidb.nix")           { inherit pkgs lib; };
   fdb        = import (envDir + "/foundationdb.nix") { inherit pkgs lib; };
 
   # Combine all manifests
   allManifests = base.manifests ++ argocd.manifests ++ cilium.manifests
     ++ clickhouse.manifests ++ nginx.manifests
-    # ++ tidb.manifests
+    ++ tidb.manifests
     ++ fdb.manifests;
 
   emitStep = m:

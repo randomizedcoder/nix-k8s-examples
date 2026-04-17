@@ -12,6 +12,8 @@
 #
 { pkgs, lib }:
 let
+  constants = import ../../constants.nix;
+
   # TiDB version — all components must match
   version = "v8.5.0";
 
@@ -448,6 +450,33 @@ in
         "            cpu: 100m"
         "            memory: 128Mi"
       ];
+    }
+
+    # ─── ArgoCD Application ───────────────────────────────────────────
+    {
+      name = "tidb/application.yaml";
+      content = ''
+        apiVersion: argoproj.io/v1alpha1
+        kind: Application
+        metadata:
+          name: tidb
+          namespace: argocd
+        spec:
+          project: default
+          source:
+            repoURL: ${constants.gitops.repoURL}
+            targetRevision: ${constants.gitops.targetRevision}
+            path: ${constants.gitops.renderedPath}/tidb
+            directory:
+              exclude: 'application.yaml'
+          destination:
+            server: https://kubernetes.default.svc
+            namespace: tidb
+          syncPolicy:
+            automated:
+              prune: true
+              selfHeal: true
+      '';
     }
   ];
 }

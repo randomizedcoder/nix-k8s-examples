@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tidb-config
+  namespace: tidb
+data:
+  start-tidb.sh: |
+    #!/bin/sh
+    set -e
+    HOSTNAME=$(hostname)
+    exec /tidb-server \
+      --store=tikv \
+      --path=pd-0.pd-headless.tidb.svc.cluster.local:2379,pd-1.pd-headless.tidb.svc.cluster.local:2379,pd-2.pd-headless.tidb.svc.cluster.local:2379 \
+      --advertise-address=${HOSTNAME}.tidb-headless.tidb.svc.cluster.local
