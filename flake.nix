@@ -122,6 +122,7 @@
           let
             networkScripts = import (nixDir + "/network-setup.nix") { inherit pkgs; };
             vmScripts = import (nixDir + "/microvm-scripts.nix") { inherit pkgs; };
+            chaosScripts = import (nixDir + "/chaos-scripts.nix") { inherit pkgs; };
           in
           {
             # Network management
@@ -146,6 +147,14 @@
             k8s-vm-stop = {
               type = "app";
               program = "${vmScripts.stop}/bin/k8s-vm-stop";
+            };
+            k8s-vm-stop-one = {
+              type = "app";
+              program = "${vmScripts.stopOne}/bin/k8s-vm-stop-one";
+            };
+            k8s-vm-start-one = {
+              type = "app";
+              program = "${vmScripts.startOne}/bin/k8s-vm-start-one";
             };
             k8s-vm-ssh = {
               type = "app";
@@ -176,6 +185,14 @@
             k8s-render-manifests = {
               type = "app";
               program = "${renderScript}/bin/k8s-render-manifests";
+            };
+          }
+
+          # Chaos / failover test
+          // {
+            k8s-chaos-failover = {
+              type = "app";
+              program = "${chaosScripts.chaosFailover}/bin/k8s-chaos-failover";
             };
           }
 

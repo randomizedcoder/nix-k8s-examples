@@ -17,6 +17,10 @@ pkgs.mkShell {
     jq
     mariadb      # mysql CLI for TiDB benchmarking
     sysbench
+    postgresql   # psql — CNPG PostgreSQL client
+    clickhouse   # clickhouse-client
+    foundationdb # fdbcli — ad-hoc FDB access
+    bc           # float arithmetic for chaos-failover recovery math
     nftables
     iproute2
     curl

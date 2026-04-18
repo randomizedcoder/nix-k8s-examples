@@ -214,6 +214,7 @@ in
         "  - name: mysql"
         "    port: 4000"
         "    targetPort: 4000"
+        "    nodePort: ${toString constants.tidb.nodePort}"
         "  - name: status"
         "    port: 10080"
         "    targetPort: 10080"

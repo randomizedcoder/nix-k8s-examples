@@ -130,7 +130,7 @@ hubble --server 10.33.33.10:31245 observe --last 20
 
 | Service | URL | Notes |
 |---------|-----|-------|
-| TiDB (MySQL protocol) | `mysql -h 10.33.33.10 -P <nodeport> -u root` | NodePort (any node IP) |
+| TiDB (MySQL protocol) | `mysql -h 10.33.33.10 -P 30400 -u root` | NodePort (any node IP) |
 | PD Dashboard | `http://pd.tidb.svc.cluster.local:2379/dashboard` | In-cluster only |
 
 TiDB provides a MySQL-compatible distributed SQL database with 3 PD nodes (Raft metadata), 4 TiKV storage nodes, and 2 stateless TiDB SQL servers. A sysbench benchmark job runs automatically after deployment.
@@ -143,6 +143,35 @@ TiDB provides a MySQL-compatible distributed SQL database with 3 PD nodes (Raft 
 | Any replica (ro) | `psql -h 10.33.33.10 -p 30501 -U app app` | Read-only; streaming replication |
 
 A CloudNativePG-managed HA PostgreSQL cluster with 1 primary + 3 replicas (one per physical node via pod anti-affinity). Streaming replication from primary to replicas; on primary failure, a replica is promoted automatically. Backed by local-path-provisioner for node-local PVs (data is not replicated across nodes at the storage layer — replication is at the PG level).
+
+### ClickHouse
+
+| Service | URL | Notes |
+|---------|-----|-------|
+| ClickHouse (HTTP) | `http://10.33.33.10:30423` | NodePort (any node IP) |
+| ClickHouse (native) | `clickhouse-client --host 10.33.33.10 --port 30900` | Native protocol |
+
+### Chaos / Failover Test
+
+`nix run .#k8s-chaos-failover` runs a continuous light transactional workload against all four databases (PostgreSQL, TiDB, ClickHouse, FoundationDB), then stops and restarts one MicroVM at a time in a loop, measuring per-DB recovery time after each kill.
+
+```bash
+# Full default run: 10 rounds × 4 nodes, 60s interval — ~40 min
+nix run .#k8s-chaos-failover
+
+# Quick smoke: 1 round, 30s interval, 10s warmup
+nix run .#k8s-chaos-failover -- --rounds=1 --interval=30 --warmup=10
+
+# Skip FDB and fail only the worker
+nix run .#k8s-chaos-failover -- --nodes=w3 --skip-dbs=fdb
+```
+
+Output is written to `./chaos-logs/`:
+- `<db>.log` — per-transaction result with nanosecond timestamps
+- `summary.tsv` — per-round, per-node, per-DB recovery time (seconds)
+- `events.log` — human-readable event stream
+
+Pair with `nix run .#k8s-vm-stop-one -- --node=<name>` and `nix run .#k8s-vm-start-one -- --node=<name>` for ad-hoc failure injection on a single node.
 
 ### SSH
 
@@ -191,10 +220,13 @@ All targets are Linux-only (QEMU MicroVMs). Run any target with `nix run .#<name
 |--------|:----:|-------------|
 | `k8s-start-all` | No | Build and start all 4 VMs (CPs first, then worker). Bootstrap runs on cp0 |
 | `k8s-vm-stop` | No | Stop all running VMs (SIGTERM → SIGKILL fallback) |
+| `k8s-vm-stop-one` | No | Stop a single VM by name. `--node=cp0\|cp1\|cp2\|w3` |
+| `k8s-vm-start-one` | No | Start a single VM by name. `--node=cp0\|cp1\|cp2\|w3` |
 | `k8s-vm-wipe` | No | Stop VMs and delete per-node data images (etcd, containerd, kubelet state) |
 | `k8s-cluster-rebuild` | No | Wipe + start-all in one command. Full clean rebuild from scratch |
 | `k8s-vm-check` | No | List running K8s MicroVM QEMU processes |
 | `k8s-vm-ssh` | No | SSH into a node. Default: cp0. Use `--node=cp1` for others |
+| `k8s-chaos-failover` | No | Loop-kill nodes one at a time; measure per-DB failover recovery time |
 
 ### GitOps & Manifests
 

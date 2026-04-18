@@ -301,9 +301,11 @@ in
           - name: http
             port: 8123
             targetPort: 8123
+            nodePort: ${toString constants.clickhouse.nodePortHttp}
           - name: native
             port: 9000
             targetPort: 9000
+            nodePort: ${toString constants.clickhouse.nodePortNative}
           type: NodePort
       '';
     }
