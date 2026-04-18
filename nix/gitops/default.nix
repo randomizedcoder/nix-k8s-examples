@@ -24,12 +24,14 @@ let
   nginx      = import (envDir + "/nginx.nix")        { inherit pkgs lib; };
   tidb       = import (envDir + "/tidb.nix")           { inherit pkgs lib; };
   fdb        = import (envDir + "/foundationdb.nix") { inherit pkgs lib; };
+  postgres   = import (envDir + "/postgres.nix")     { inherit pkgs lib helm; };
 
   # Combine all manifests
   allManifests = base.manifests ++ argocd.manifests ++ cilium.manifests
     ++ clickhouse.manifests ++ nginx.manifests
     ++ tidb.manifests
-    ++ fdb.manifests;
+    ++ fdb.manifests
+    ++ postgres.manifests;
 
   emitStep = m:
     if m ? source then ''

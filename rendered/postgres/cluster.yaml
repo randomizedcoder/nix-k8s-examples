@@ -1,0 +1,26 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: pg
+  namespace: postgres
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  instances: 4
+  imageName: ghcr.io/cloudnative-pg/postgresql:16.4
+  primaryUpdateStrategy: unsupervised
+  storage:
+    size: 1Gi
+    storageClass: local-path
+  affinity:
+    podAntiAffinityType: required
+    topologyKey: kubernetes.io/hostname
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+  bootstrap:
+    initdb:
+      database: app
+      owner: app
+

@@ -1,0 +1,9 @@
+# CNPG Helm values — rendered at Nix build time.
+# clusterWide: true means the operator watches all namespaces.
+config:
+  clusterWide: true
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+

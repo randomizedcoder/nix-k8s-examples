@@ -87,7 +87,7 @@ nix run .#k8s-vm-ssh -- --node=cp0 kubectl -n argocd get applications
 |---------|-----|-------|
 | ArgoCD UI | `https://10.33.33.10:30443` | NodePort (any node IP works) |
 
-ArgoCD manages 7 Applications (cilium, argocd, base, clickhouse, foundationdb, nginx, tidb) via the rendered manifests pattern. After first boot, ArgoCD is the source of truth via git.
+ArgoCD manages 8 Applications (cilium, argocd, base, clickhouse, foundationdb, nginx, tidb, postgres) via the rendered manifests pattern. After first boot, ArgoCD is the source of truth via git.
 
 ```bash
 # Get the initial admin password
@@ -134,6 +134,15 @@ hubble --server 10.33.33.10:31245 observe --last 20
 | PD Dashboard | `http://pd.tidb.svc.cluster.local:2379/dashboard` | In-cluster only |
 
 TiDB provides a MySQL-compatible distributed SQL database with 3 PD nodes (Raft metadata), 4 TiKV storage nodes, and 2 stateless TiDB SQL servers. A sysbench benchmark job runs automatically after deployment.
+
+### PostgreSQL (CloudNativePG)
+
+| Service | URL | Notes |
+|---------|-----|-------|
+| Primary (rw) | `psql -h 10.33.33.10 -p 30500 -U app app` | Writes land here; auto-failover via CNPG |
+| Any replica (ro) | `psql -h 10.33.33.10 -p 30501 -U app app` | Read-only; streaming replication |
+
+A CloudNativePG-managed HA PostgreSQL cluster with 1 primary + 3 replicas (one per physical node via pod anti-affinity). Streaming replication from primary to replicas; on primary failure, a replica is promoted automatically. Backed by local-path-provisioner for node-local PVs (data is not replicated across nodes at the storage layer — replication is at the PG level).
 
 ### SSH
 
@@ -245,7 +254,7 @@ On first boot, a systemd oneshot service (`k8s-gitops-bootstrap`) on cp0 automat
 5. Apply ArgoCD (helm-templated at Nix build time)
    └── Wait for Application CRD + argocd-server rollout
 6. Apply all ArgoCD Application CRs
-   (cilium, argocd, base, clickhouse, foundationdb, nginx)
+   (cilium, argocd, base, clickhouse, foundationdb, nginx, tidb, postgres)
 7. Touch /var/lib/k8s-bootstrap/done (idempotent marker)
 ```
 
@@ -303,6 +312,7 @@ nix run .#k8s-render-manifests -- --check
 | **ClickHouse** | Plain YAML | 3 Keeper (Raft) + 2 shards x 2 replicas, ReplicatedMergeTree |
 | **FoundationDB** | Plain YAML | 3 coordinators + 4 storage, triple-ssd replication, benchmark |
 | **TiDB** | Plain YAML | 3 PD + 4 TiKV + 2 TiDB, MySQL-compatible distributed SQL, sysbench |
+| **PostgreSQL (CNPG)** | Helm-rendered + CR | 1 primary + 3 replicas via CloudNativePG operator, auto-failover |
 | **nginx** | Plain YAML | Hello-world deployment + NodePort service |
 
 ## Certificate Architecture (PKI)
@@ -595,7 +605,8 @@ nix/
         ├── clickhouse.nix       # ClickHouse 3 Keeper + 2x2 shards + Application
         ├── foundationdb.nix     # FoundationDB 3 coord + 4 storage + benchmark + Application
         ├── nginx.nix            # Nginx hello-world + Application
-        └── tidb.nix             # TiDB 3 PD + 4 TiKV + 2 TiDB + sysbench + Application
+        ├── tidb.nix             # TiDB 3 PD + 4 TiKV + 2 TiDB + sysbench + Application
+        └── postgres.nix         # CNPG operator (helm) + Cluster CR (1 primary + 3 replicas) + Application
 rendered/                        # Committed rendered manifests (git-tracked)
 ├── argocd/                      # ArgoCD install.yaml (helm-rendered), values, Application CR
 ├── base/                        # Namespaces, RBAC, CoreDNS
@@ -603,7 +614,8 @@ rendered/                        # Committed rendered manifests (git-tracked)
 ├── clickhouse/                  # ClickHouse manifests
 ├── fdb/                         # FoundationDB manifests + benchmark
 ├── nginx/                       # Nginx manifests
-└── tidb/                        # TiDB PD + TiKV + TiDB + sysbench manifests
+├── tidb/                        # TiDB PD + TiKV + TiDB + sysbench manifests
+└── postgres/                    # local-path-provisioner, CNPG operator (helm-rendered), Cluster CR, NodePort services
 ```
 
 ## Design Decisions

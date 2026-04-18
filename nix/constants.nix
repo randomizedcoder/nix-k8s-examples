@@ -153,6 +153,24 @@ rec {
       url     = "https://github.com/argoproj/argo-helm/releases/download/argo-cd-9.5.0/argo-cd-9.5.0.tgz";
       hash    = "sha256-2u2U/iCgJ3LFh4w2dKSXbaLF2au5oeIDVpkYnCnfjgk=";
     };
+    cnpg = {
+      version = "0.28.0";  # appVersion v1.29.0
+      url     = "https://github.com/cloudnative-pg/charts/releases/download/cloudnative-pg-v0.28.0/cloudnative-pg-0.28.0.tgz";
+      hash    = "sha256-gdN4lPNgbfm9kcVRkFP0GnnoM9KKyiUv+zkpTLnLGa4=";
+    };
+  };
+
+  # ─── Rancher local-path-provisioner (PV backend for CNPG) ──────────
+  localPathProvisioner = {
+    version = "v0.0.34";
+    url  = "https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.34/deploy/local-path-storage.yaml";
+    hash = "sha256-+rjW6JM+RPivc5hgP7YxIuTqZJDwr4NUkQjWhkft2ek=";
+  };
+
+  # ─── PostgreSQL (CloudNativePG) NodePorts ──────────────────────────
+  postgres = {
+    nodePortRw = 30500;  # primary: read-write
+    nodePortRo = 30501;  # replicas: read-only
   };
 
   # ─── ArgoCD service (NodePort reachable from host) ─────────────────
