@@ -32,6 +32,82 @@ in
     '';
   };
 
+  stopOne = pkgs.writeShellApplication {
+    name = "k8s-vm-stop-one";
+    runtimeInputs = with pkgs; [ procps ];
+    text = ''
+      NODE=""
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --node=*) NODE="''${1#--node=}"; shift ;;
+          *) echo "Unknown arg: $1" >&2; exit 2 ;;
+        esac
+      done
+
+      case "$NODE" in
+        cp0|cp1|cp2|w3) ;;
+        *) echo "Usage: k8s-vm-stop-one --node=cp0|cp1|cp2|w3" >&2; exit 2 ;;
+      esac
+
+      PROC="k8s-$NODE"
+
+      if ! pgrep -x "$PROC" > /dev/null; then
+        echo "  $PROC not running, nothing to do"
+        exit 0
+      fi
+
+      echo "  Sending SIGTERM to $PROC..."
+      pkill -x "$PROC" || true
+      sleep 2
+
+      if pgrep -x "$PROC" > /dev/null; then
+        echo "  Still alive, sending SIGKILL..."
+        pkill -9 -x "$PROC" || true
+        sleep 1
+      fi
+
+      if pgrep -x "$PROC" > /dev/null; then
+        echo "  FAILED: $PROC still running" >&2
+        exit 1
+      fi
+
+      echo "  $PROC stopped."
+    '';
+  };
+
+  startOne = pkgs.writeShellApplication {
+    name = "k8s-vm-start-one";
+    runtimeInputs = with pkgs; [ procps nix coreutils ];
+    text = ''
+      NODE=""
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --node=*) NODE="''${1#--node=}"; shift ;;
+          *) echo "Unknown arg: $1" >&2; exit 2 ;;
+        esac
+      done
+
+      case "$NODE" in
+        cp0|cp1|cp2|w3) ;;
+        *) echo "Usage: k8s-vm-start-one --node=cp0|cp1|cp2|w3" >&2; exit 2 ;;
+      esac
+
+      PROC="k8s-$NODE"
+      RESULT_LINK="result-k8s-$NODE-oneshot"
+
+      if pgrep -x "$PROC" > /dev/null; then
+        echo "  $PROC already running, nothing to do"
+        exit 0
+      fi
+
+      rm -f "$RESULT_LINK"
+      nix build ".#k8s-microvm-$NODE" -o "$RESULT_LINK"
+      "$RESULT_LINK/bin/microvm-run" </dev/null >/dev/null 2>&1 &
+      disown || true
+      echo "  $PROC started (PID $!)"
+    '';
+  };
+
   stop = pkgs.writeShellApplication {
     name = "k8s-vm-stop";
     runtimeInputs = with pkgs; [ procps ];

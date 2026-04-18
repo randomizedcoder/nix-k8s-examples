@@ -173,6 +173,26 @@ rec {
     nodePortRo = 30501;  # replicas: read-only
   };
 
+  # ─── TiDB NodePort (host-reachable MySQL-protocol endpoint) ────────
+  tidb = {
+    nodePort = 30400;  # MySQL on 4000 → host :30400
+  };
+
+  # ─── ClickHouse NodePorts (host-reachable HTTP + native) ───────────
+  clickhouse = {
+    nodePortHttp   = 30423;  # HTTP on 8123 → host :30423
+    nodePortNative = 30900;  # native on 9000 → host :30900
+  };
+
+  # ─── Chaos / failover test defaults ────────────────────────────────
+  chaos = {
+    defaultRounds         = 10;
+    defaultIntervalSec    = 60;
+    defaultPostRoundWait  = 60;
+    defaultWarmupSec      = 15;
+    defaultLogDir         = "./chaos-logs";
+  };
+
   # ─── ArgoCD service (NodePort reachable from host) ─────────────────
   argocd = {
     nodePortHttps = 30443;
