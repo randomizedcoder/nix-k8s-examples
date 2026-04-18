@@ -15,6 +15,7 @@
 { pkgs }:
 let
   constants = import ./constants.nix;
+  vmScripts = import ./microvm-scripts.nix { inherit pkgs; };
 in
 {
   chaosFailover = pkgs.writeShellApplication {
@@ -28,7 +29,6 @@ in
       gawk
       coreutils
       procps
-      nix
       gnused
       sshpass
       openssh
@@ -99,18 +99,20 @@ EOF
       # Avoid requiring a host kubeconfig. Runs kubectl on cp0 with its
       # in-VM admin kubeconfig.
       kctl() {
+        local escaped
+        # shellcheck disable=SC2059
+        escaped="$(printf ' %q' "$@")"
         sshpass -p "$SSH_PASS" ssh \
           -o StrictHostKeyChecking=no \
           -o UserKnownHostsFile=/dev/null \
           -o LogLevel=ERROR \
           "root@$CP0_IP" \
-          "KUBECONFIG=/var/lib/kubernetes/pki/admin-kubeconfig kubectl $*"
+          "KUBECONFIG=/var/lib/kubernetes/pki/admin-kubeconfig kubectl$escaped"
       }
 
-      # ─── Pre-build stop-one/start-one so hot loop is fast ────────────
-      log "Pre-building k8s-vm-stop-one and k8s-vm-start-one..."
-      STOP_BIN="$(nix build --no-link --print-out-paths .#k8s-vm-stop-one)/bin/k8s-vm-stop-one"
-      START_BIN="$(nix build --no-link --print-out-paths .#k8s-vm-start-one)/bin/k8s-vm-start-one"
+      # ─── Resolve stop-one/start-one binaries (baked in at build time) ─
+      STOP_BIN="${vmScripts.stopOne}/bin/k8s-vm-stop-one"
+      START_BIN="${vmScripts.startOne}/bin/k8s-vm-start-one"
 
       # ─── Check DB skip list ──────────────────────────────────────────
       skip_db() {
@@ -144,9 +146,11 @@ EOF
               CREATE TABLE IF NOT EXISTS chaos.t (ts TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP(6));" >/dev/null
       }
       ensure_clickhouse() {
+        # Create on all replicas via ON CLUSTER (cluster name: ch4).
         clickhouse-client --host "$CP0_IP" --port "$CH_PORT_NATIVE" \
-          -q "CREATE DATABASE IF NOT EXISTS chaos;
-              CREATE TABLE IF NOT EXISTS chaos.t (ts DateTime64(6) DEFAULT now64()) ENGINE = MergeTree ORDER BY ts;" >/dev/null
+          -q "CREATE DATABASE IF NOT EXISTS chaos ON CLUSTER ch4;" >/dev/null
+        clickhouse-client --host "$CP0_IP" --port "$CH_PORT_NATIVE" \
+          -q "CREATE TABLE IF NOT EXISTS chaos.t ON CLUSTER ch4 (ts DateTime64(6) DEFAULT now64()) ENGINE = MergeTree ORDER BY ts;" >/dev/null
       }
       ensure_fdb() {
         # FDB is schemaless; writemode toggle is per-session. No setup.
@@ -163,73 +167,82 @@ EOF
         esac
       done
 
-      # ─── Pick a live FDB pod ─────────────────────────────────────────
+      # ─── Pick a live FDB pod (Ready=True) ────────────────────────────
       # Re-resolve each iteration in case the previous pick was on a
-      # node we're about to kill (or just killed).
+      # node we're about to kill (or just killed). Filter by Ready
+      # condition — phase=Running is true even during container restart,
+      # which gives "container not found" on exec.
       pick_fdb_pod() {
         kctl -n fdb get pods -l app=fdb \
-          --field-selector=status.phase=Running \
-          -o jsonpath='{.items[0].metadata.name}' 2>/dev/null
+          -o jsonpath='{range .items[?(@.status.containerStatuses[0].ready==true)]}{.metadata.name}{"\n"}{end}' \
+          2>/dev/null | shuf -n 1
       }
 
       # ─── Workload loops (one subshell per DB) ────────────────────────
+      # Hard cap per-call wall time so a dead endpoint can't stall the loop.
+      # timeout returns 124 on kill; we report that as FAIL like any other error.
       run_workload_pg() {
         while true; do
           ts="$(date +%s.%N)"
-          if out=$(PGPASSWORD="$PG_PASS" psql -h "$CP0_IP" -p "$PG_PORT" \
+          if out=$(PGPASSWORD="$PG_PASS" PGCONNECT_TIMEOUT=3 \
+                     timeout 8 psql -h "$CP0_IP" -p "$PG_PORT" \
                      -U app -d app -w -tA --set ON_ERROR_STOP=1 \
                      -c "INSERT INTO chaos DEFAULT VALUES; SELECT count(*) FROM chaos;" 2>&1); then
             echo "$ts OK"
           else
             echo "$ts FAIL ''${out//$'\n'/ }"
           fi
-          sleep 0.5
+          sleep 0.5 || true
         done
       }
 
       run_workload_tidb() {
         while true; do
           ts="$(date +%s.%N)"
-          if out=$(mysql -h "$CP0_IP" -P "$TIDB_PORT" -u root \
+          if out=$(timeout 8 mysql -h "$CP0_IP" -P "$TIDB_PORT" -u root \
                      --connect-timeout=3 \
                      -e "INSERT INTO chaos.t VALUES(NOW(6)); SELECT COUNT(*) FROM chaos.t;" 2>&1); then
             echo "$ts OK"
           else
             echo "$ts FAIL ''${out//$'\n'/ }"
           fi
-          sleep 0.5
+          sleep 0.5 || true
         done
       }
 
       run_workload_clickhouse() {
         while true; do
           ts="$(date +%s.%N)"
-          if out=$(clickhouse-client --host "$CP0_IP" --port "$CH_PORT_NATIVE" \
+          if out=$(timeout 8 clickhouse-client --host "$CP0_IP" --port "$CH_PORT_NATIVE" \
                      --connect_timeout 3 --send_timeout 3 --receive_timeout 3 \
                      -q "INSERT INTO chaos.t VALUES(now64()); SELECT count() FROM chaos.t;" 2>&1); then
             echo "$ts OK"
           else
             echo "$ts FAIL ''${out//$'\n'/ }"
           fi
-          sleep 0.5
+          sleep 0.5 || true
         done
       }
 
       run_workload_fdb() {
         while true; do
           ts="$(date +%s.%N)"
-          pod="$(pick_fdb_pod)"
+          pod="$(pick_fdb_pod || true)"
           if [[ -z "$pod" ]]; then
             echo "$ts FAIL no_live_fdb_pod"
           else
-            if out=$(kctl -n fdb exec "$pod" -- \
-                       fdbcli --exec "writemode on; set chaos:$ts 1; get chaos:$ts" 2>&1); then
+            if out=$(timeout 10 sshpass -p "$SSH_PASS" ssh \
+                       -o StrictHostKeyChecking=no \
+                       -o UserKnownHostsFile=/dev/null \
+                       -o LogLevel=ERROR \
+                       "root@$CP0_IP" \
+                       "KUBECONFIG=/var/lib/kubernetes/pki/admin-kubeconfig kubectl -n fdb exec $pod -c fdb -- fdbcli --exec 'writemode on; set chaos:$ts 1; get chaos:$ts'" 2>&1); then
               echo "$ts OK"
             else
               echo "$ts FAIL ''${out//$'\n'/ }"
             fi
           fi
-          sleep 0.5
+          sleep 0.5 || true
         done
       }
 
