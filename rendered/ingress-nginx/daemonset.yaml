@@ -124,10 +124,11 @@ metadata:
     argocd.argoproj.io/sync-wave: "1"
 spec:
   # ClusterIP (not LoadBalancer) — public reachability is via
-  # hostPort on every node. externalTrafficPolicy=Local preserves
-  # client source IPs for logs + federation.
+  # hostPort on every node. externalTrafficPolicy=Local is only
+  # valid on LoadBalancer/NodePort services; client-IP preservation
+  # comes from ingress-nginx's own proxy-protocol / X-Forwarded-For
+  # handling, not from the cluster Service layer.
   type: ClusterIP
-  externalTrafficPolicy: Local
   ipFamilyPolicy: SingleStack
   ipFamilies: [IPv4]
   ports:

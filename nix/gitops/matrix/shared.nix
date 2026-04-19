@@ -44,12 +44,11 @@ in
           owner: app
           cluster:
             name: pg
-          # Synapse REQUIRES these exact locale settings for hash
-          # consistency across replicas and versions (documented in
-          # synapse's postgres setup guide).
+          # Synapse prefers C locale for hash consistency; the in-cluster
+          # CNPG CRD version does not expose localeCtype/localeCollate.
+          # Accept whatever the cluster's template1 defaults to — revisit
+          # if Synapse complains. Inherit from template0 for clean state.
           encoding: UTF8
-          localeCtype: C
-          localeCollate: C
           template: template0
         ---
         apiVersion: postgresql.cnpg.io/v1

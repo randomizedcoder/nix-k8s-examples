@@ -21,8 +21,9 @@
 #   - tolerates the control-plane taint (same pattern as Cilium + CoreDNS);
 #   - uses hostNetwork: false (hostPort is enough, no need to share the
 #     node's netns);
-#   - externalTrafficPolicy: Local — preserves client IP, avoids an extra
-#     SNAT hop.
+#   - client IP preservation is delegated to ingress-nginx's
+#     proxy-protocol / X-Forwarded-For handling (not Service-level
+#     externalTrafficPolicy, which is a LoadBalancer/NodePort-only knob).
 #
 { pkgs, lib }:
 let
@@ -190,10 +191,11 @@ in
             argocd.argoproj.io/sync-wave: "1"
         spec:
           # ClusterIP (not LoadBalancer) — public reachability is via
-          # hostPort on every node. externalTrafficPolicy=Local preserves
-          # client source IPs for logs + federation.
+          # hostPort on every node. externalTrafficPolicy=Local is only
+          # valid on LoadBalancer/NodePort services; client-IP preservation
+          # comes from ingress-nginx's own proxy-protocol / X-Forwarded-For
+          # handling, not from the cluster Service layer.
           type: ClusterIP
-          externalTrafficPolicy: Local
           ipFamilyPolicy: SingleStack
           ipFamilies: [IPv4]
           ports:
