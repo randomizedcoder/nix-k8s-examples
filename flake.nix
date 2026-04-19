@@ -196,6 +196,20 @@
             };
           }
 
+          # Matrix operator helpers
+          // (let
+            matrixScripts = import (nixDir + "/matrix-scripts.nix") { inherit pkgs; };
+          in {
+            k8s-matrix-register-user = {
+              type = "app";
+              program = "${matrixScripts.registerUser}/bin/k8s-matrix-register-user";
+            };
+            k8s-matrix-bootstrap-secrets = {
+              type = "app";
+              program = "${matrixScripts.bootstrapSecrets}/bin/k8s-matrix-bootstrap-secrets";
+            };
+          })
+
           # Lifecycle test apps
           // (lifecycle.apps or {})
         );

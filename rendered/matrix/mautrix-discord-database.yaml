@@ -1,0 +1,14 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: mautrix-discord
+  namespace: postgres
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  name: mautrix_discord
+  owner: app
+  cluster: { name: pg }
+  encoding: UTF8
+  template: template0
+

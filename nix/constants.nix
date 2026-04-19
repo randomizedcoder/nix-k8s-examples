@@ -167,6 +167,24 @@ rec {
     hash = "sha256-+rjW6JM+RPivc5hgP7YxIuTqZJDwr4NUkQjWhkft2ek=";
   };
 
+  # ─── ingress-nginx (static installer) ──────────────────────────────
+  # Upstream "cloud" provider deploy.yaml. We patch it in-nix to turn
+  # the Deployment into a DaemonSet with hostPort 80/443 and tolerate
+  # the control-plane taint — every node runs an ingress instance so
+  # the future anycast VIP lands on a local proxy wherever it arrives.
+  ingressNginx = {
+    version = "v1.11.3";
+    url  = "https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.11.3/deploy/static/provider/cloud/deploy.yaml";
+    hash = "sha256-4EPV/eZGr5PjaKfNN512v2ODu5MiKfYa12Ncw4YSTpY=";
+  };
+
+  # ─── cert-manager (static installer) ───────────────────────────────
+  certManager = {
+    version = "v1.16.2";
+    url  = "https://github.com/cert-manager/cert-manager/releases/download/v1.16.2/cert-manager.yaml";
+    hash = "sha256-HVHN7NRC8fX4l4Pp4BabldNyck2iA8x13XpcTlChDOY=";
+  };
+
   # ─── PostgreSQL (CloudNativePG) NodePorts ──────────────────────────
   postgres = {
     nodePortRw = 30500;  # primary: read-write
@@ -196,6 +214,55 @@ rec {
   # ─── ArgoCD service (NodePort reachable from host) ─────────────────
   argocd = {
     nodePortHttps = 30443;
+  };
+
+  # ─── Matrix homeserver + Element + bridges + bots ─────────────────
+  #
+  # IMPORTANT: Matrix bakes `serverName` into every signed event. It
+  # can NOT be changed later without rebuilding the Synapse DB
+  # (fresh user accounts, fresh rooms). See docs/matrix.md for the
+  # phase-1 → phase-2 public cutover procedure.
+  matrix = {
+    serverName = "matrix.lab.local";
+
+    # Phase 1 (lab): federation OFF — homeserver answers client API only.
+    # Phase 2 (public): flip to true and re-render after public DNS + LE
+    # certs are in place. Expect a fresh-DB cutover.
+    federation = false;
+
+    # Public hostnames surfaced by the Ingress. All point to the same
+    # IP in /etc/hosts for phase-1 lab testing.
+    elementHost  = "element.lab.local";
+    hookshotHost = "hookshot.lab.local";
+    maubotHost   = "maubot.lab.local";
+
+    # Docker image pins (updated manually; matrix upstream tags).
+    images = {
+      synapse         = "matrixdotorg/synapse:v1.119.0";
+      element         = "vectorim/element-web:v1.11.84";
+      hookshot        = "halfshot/matrix-hookshot:6.0.3";
+      maubot          = "dock.mau.dev/maubot/maubot:v0.5.0";
+      mautrixDiscord  = "dock.mau.dev/mautrix/discord:v0.7.2";
+    };
+
+    # Synapse media store — single-replica PVC on worker w3 via
+    # local-path. Same node-local-storage limitation as CNPG; documented
+    # as a phase-2 migration to S3 in docs/resilience-testing.md.
+    mediaStorageGi = 5;
+
+    # NodePort for Synapse admin API (host-reachable for one-shot
+    # `register_new_matrix_user` from the dev box).
+    synapseAdminNodePort = 30800;
+  };
+
+  # ─── ingress-nginx host ports (DaemonSet, phase-1 stand-in for anycast) ─
+  # ingress-nginx binds hostPort 80/443 on every node. The host-side
+  # haproxy frontend (see network-setup.nix) fans :443 across all 4
+  # node IPs so a browser on the dev host reaches a healthy ingress even
+  # while one node is being killed by the chaos tool.
+  ingress = {
+    hostPortHttp  = 80;
+    hostPortHttps = 443;
   };
 
   # ─── SSH Configuration ─────────────────────────────────────────────

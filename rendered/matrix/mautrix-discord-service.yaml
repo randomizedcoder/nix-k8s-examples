@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: mautrix-discord
+  namespace: matrix
+  annotations:
+    argocd.argoproj.io/sync-wave: "6"
+spec:
+  type: ClusterIP
+  selector: { app: mautrix-discord }
+  ports:
+  - { name: appservice, port: 29334, targetPort: 29334 }
+

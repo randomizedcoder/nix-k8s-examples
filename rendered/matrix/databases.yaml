@@ -1,0 +1,50 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: synapse
+  namespace: postgres
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  name: synapse
+  owner: app
+  cluster:
+    name: pg
+  # Synapse REQUIRES these exact locale settings for hash
+  # consistency across replicas and versions (documented in
+  # synapse's postgres setup guide).
+  encoding: UTF8
+  localeCtype: C
+  localeCollate: C
+  template: template0
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: maubot
+  namespace: postgres
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  name: maubot
+  owner: app
+  cluster:
+    name: pg
+  encoding: UTF8
+  template: template0
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: hookshot
+  namespace: postgres
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  name: hookshot
+  owner: app
+  cluster:
+    name: pg
+  encoding: UTF8
+  template: template0
+

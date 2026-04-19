@@ -16,19 +16,27 @@ let
   cpNodes = builtins.filter (n: nodes.${n}.role == "control-plane") constants.nodeNames;
   cpIps = builtins.map (n: constants.network.ipv4.${n}) cpNodes;
 
-  # haproxy config for apiserver load balancing
+  # All node IPs (CP + worker) for ingress-nginx hostPort fanout — the
+  # lab-time stand-in for the phase-2 anycast VIP. ingress-nginx runs as
+  # a DaemonSet binding hostPort 443 on every node, so the host haproxy
+  # sprays :443 traffic across all 4 healthy backends; kills of a single
+  # node still leave three live backends for the browser to land on.
+  allNodeIps = constants.allNodeIps4;
+
+  # haproxy config: apiserver LB + Matrix ingress LB
   haproxyConfig = pkgs.writeText "k8s-haproxy.cfg" ''
     global
       daemon
       pidfile /run/k8s-haproxy.pid
-      maxconn 256
+      maxconn 1024
 
     defaults
       mode tcp
       timeout connect 5s
-      timeout client 30s
-      timeout server 30s
+      timeout client 300s
+      timeout server 300s
 
+    # kube-apiserver HA: roundrobin across the 3 control planes.
     frontend k8s-apiserver
       bind ${gateway4}:6443
       default_backend k8s-apiserver-backends
@@ -39,6 +47,34 @@ let
       ${builtins.concatStringsSep "\n    " (builtins.map (ip:
         "server ${ip} ${ip}:6443 check inter 5s fall 3 rise 2"
       ) cpIps)}
+
+    # Matrix ingress HA: leastconn across all 4 nodes' hostPort 443.
+    # This is the lab stand-in for the future anycast VIP. Plain TCP
+    # passthrough — ingress-nginx terminates TLS itself.
+    frontend matrix-ingress-https
+      bind ${gateway4}:${toString constants.ingress.hostPortHttps}
+      default_backend matrix-ingress-https-backends
+
+    backend matrix-ingress-https-backends
+      option tcp-check
+      tcp-check connect port ${toString constants.ingress.hostPortHttps}
+      balance leastconn
+      ${builtins.concatStringsSep "\n    " (builtins.map (ip:
+        "server ${ip} ${ip}:${toString constants.ingress.hostPortHttps} check inter 3s fall 2 rise 2"
+      ) allNodeIps)}
+
+    # Matrix ingress HTTP (for ACME HTTP-01 in phase 2 + redirect to HTTPS).
+    frontend matrix-ingress-http
+      bind ${gateway4}:${toString constants.ingress.hostPortHttp}
+      default_backend matrix-ingress-http-backends
+
+    backend matrix-ingress-http-backends
+      option tcp-check
+      tcp-check connect port ${toString constants.ingress.hostPortHttp}
+      balance leastconn
+      ${builtins.concatStringsSep "\n    " (builtins.map (ip:
+        "server ${ip} ${ip}:${toString constants.ingress.hostPortHttp} check inter 3s fall 2 rise 2"
+      ) allNodeIps)}
   '';
 in
 {

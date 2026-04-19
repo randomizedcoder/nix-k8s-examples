@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hookshot
+  namespace: matrix
+  annotations:
+    argocd.argoproj.io/sync-wave: "6"
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app: hookshot }
+  template:
+    metadata:
+      labels: { app: hookshot }
+    spec:
+      tolerations:
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+        effect: NoSchedule
+      initContainers:
+      # Generate passkey.pem on first boot if missing — hookshot
+      # uses it to sign messages in the generic webhook path.
+      - name: init-passkey
+        image: halfshot/matrix-hookshot:6.0.3
+        command:
+        - sh
+        - -c
+        - |
+          set -e
+          if [ ! -f /data/passkey.pem ]; then
+            echo "Generating hookshot passkey..."
+            openssl genrsa -out /data/passkey.pem 4096
+          fi
+        volumeMounts:
+        - { name: data, mountPath: /data }
+      containers:
+      - name: hookshot
+        image: halfshot/matrix-hookshot:6.0.3
+        args: ["node", "/usr/src/app/lib/App/BridgeApp.js", "/etc/hookshot/config.yml", "/etc/hookshot/registration.yaml"]
+        ports:
+        - { name: webhook,    containerPort: 9000 }
+        - { name: appservice, containerPort: 9993 }
+        readinessProbe:
+          httpGet: { path: /health, port: 9002 }
+          initialDelaySeconds: 15
+          periodSeconds: 10
+        resources:
+          requests: { cpu: 50m,  memory: 128Mi }
+          limits:   { cpu: 500m, memory: 512Mi }
+        volumeMounts:
+        - { name: data,   mountPath: /data }
+        - { name: config, mountPath: /etc/hookshot, readOnly: true }
+      volumes:
+      - name: data
+        emptyDir: {}
+      - name: config
+        configMap:
+          name: hookshot-config
+

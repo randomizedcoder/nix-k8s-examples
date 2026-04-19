@@ -17,21 +17,27 @@ let
   helm = import ./helm-chart.nix { inherit pkgs lib; };
 
   # Import all environment modules
-  base       = import (envDir + "/base.nix")         { inherit pkgs lib; };
-  argocd     = import (envDir + "/argocd.nix")       { inherit pkgs lib helm; };
-  cilium     = import (envDir + "/cilium.nix")       { inherit pkgs lib helm; };
-  clickhouse = import (envDir + "/clickhouse.nix")   { inherit pkgs lib; };
-  nginx      = import (envDir + "/nginx.nix")        { inherit pkgs lib; };
-  tidb       = import (envDir + "/tidb.nix")           { inherit pkgs lib; };
-  fdb        = import (envDir + "/foundationdb.nix") { inherit pkgs lib; };
-  postgres   = import (envDir + "/postgres.nix")     { inherit pkgs lib helm; };
+  base         = import (envDir + "/base.nix")          { inherit pkgs lib; };
+  argocd       = import (envDir + "/argocd.nix")        { inherit pkgs lib helm; };
+  cilium       = import (envDir + "/cilium.nix")        { inherit pkgs lib helm; };
+  clickhouse   = import (envDir + "/clickhouse.nix")    { inherit pkgs lib; };
+  nginx        = import (envDir + "/nginx.nix")         { inherit pkgs lib; };
+  tidb         = import (envDir + "/tidb.nix")          { inherit pkgs lib; };
+  fdb          = import (envDir + "/foundationdb.nix")  { inherit pkgs lib; };
+  postgres     = import (envDir + "/postgres.nix")      { inherit pkgs lib helm; };
+  ingressNginx = import (envDir + "/ingress-nginx.nix") { inherit pkgs lib; };
+  certManager  = import (envDir + "/cert-manager.nix")  { inherit pkgs lib; };
+  matrix       = import (envDir + "/matrix.nix")        { inherit pkgs lib; };
 
   # Combine all manifests
   allManifests = base.manifests ++ argocd.manifests ++ cilium.manifests
     ++ clickhouse.manifests ++ nginx.manifests
     ++ tidb.manifests
     ++ fdb.manifests
-    ++ postgres.manifests;
+    ++ postgres.manifests
+    ++ ingressNginx.manifests
+    ++ certManager.manifests
+    ++ matrix.manifests;
 
   emitStep = m:
     if m ? source then ''

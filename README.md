@@ -151,6 +151,35 @@ A CloudNativePG-managed HA PostgreSQL cluster with 1 primary + 3 replicas (one p
 | ClickHouse (HTTP) | `http://10.33.33.10:30423` | NodePort (any node IP) |
 | ClickHouse (native) | `clickhouse-client --host 10.33.33.10 --port 30900` | Native protocol |
 
+### Matrix (Chat)
+
+| Service | URL | Notes |
+|---------|-----|-------|
+| Element Web | `https://element.lab.local` | Via host haproxy :443 → ingress-nginx (all 4 nodes) |
+| Synapse client API | `https://matrix.lab.local/_matrix/client/versions` | Same path |
+| Hookshot webhooks | `https://hookshot.lab.local/webhook/` | Same path |
+| maubot admin UI | `https://maubot.lab.local` | Same path |
+| Synapse admin API | `http://10.33.33.10:30800` | NodePort — used by `k8s-matrix-register-user` |
+
+Self-hosted Matrix homeserver (Synapse) + Element Web client + matrix-hookshot (GitHub/GitLab/Jira webhooks) + maubot (bot plugin host) + mautrix-discord (Discord bridge). Serves an open-source community — humans chat, bots automate, external systems post via webhooks. Phase 1 runs on the lab bridge; phase 2 swaps the host haproxy fan-out for a Cilium-BGP anycast VIP. See [docs/matrix.md](docs/matrix.md) for the full operator guide.
+
+```bash
+# 1. /etc/hosts on the dev host:
+#    10.33.33.1 matrix.lab.local element.lab.local hookshot.lab.local maubot.lab.local
+
+# 2. Generate secrets (tokens, bcrypt'd maubot admin password) once per cluster:
+nix run .#k8s-matrix-bootstrap-secrets
+
+# 3. Register a user:
+nix run .#k8s-matrix-register-user -- --username=alice
+
+# 4. Browse to https://element.lab.local (accept the self-signed cert), log in as alice.
+```
+
+Permanent decision: `server_name = matrix.lab.local`. Matrix bakes this into every
+signed event — changing it later requires wiping the Synapse DB. See docs/matrix.md
+§ "server_name is forever".
+
 ### Chaos / Failover Test
 
 `nix run .#k8s-chaos-failover` runs a continuous light transactional workload against all four databases (PostgreSQL, TiDB, ClickHouse, FoundationDB), then stops and restarts one MicroVM at a time in a loop, measuring per-DB recovery time after each kill.
@@ -227,6 +256,8 @@ All targets are Linux-only (QEMU MicroVMs). Run any target with `nix run .#<name
 | `k8s-vm-check` | No | List running K8s MicroVM QEMU processes |
 | `k8s-vm-ssh` | No | SSH into a node. Default: cp0. Use `--node=cp1` for others |
 | `k8s-chaos-failover` | No | Loop-kill nodes one at a time; measure per-DB failover recovery time |
+| `k8s-matrix-register-user` | No | Register a Matrix user via Synapse admin API. `--username=<name> [--admin]` |
+| `k8s-matrix-bootstrap-secrets` | No | Generate Matrix tokens + secrets, create `matrix-secrets` K8s Secret. See docs/matrix.md |
 
 ### GitOps & Manifests
 
@@ -346,6 +377,9 @@ nix run .#k8s-render-manifests -- --check
 | **TiDB** | Plain YAML | 3 PD + 4 TiKV + 2 TiDB, MySQL-compatible distributed SQL, sysbench |
 | **PostgreSQL (CNPG)** | Helm-rendered + CR | 1 primary + 3 replicas via CloudNativePG operator, auto-failover |
 | **nginx** | Plain YAML | Hello-world deployment + NodePort service |
+| **ingress-nginx** | Upstream YAML + overlay | DaemonSet on all 4 nodes, hostPort 80/443, anycast-ready |
+| **cert-manager** | Upstream YAML + CRs | `selfsigned-lab` ClusterIssuer (phase 1); stub `letsencrypt-prod-dns01` (phase 2) |
+| **Matrix** | Plain YAML + CNPG `Database` CRs | Synapse + Element + hookshot + maubot + mautrix-discord on `matrix.lab.local` |
 
 ## Certificate Architecture (PKI)
 
@@ -630,15 +664,25 @@ nix/
 └── gitops/
     ├── default.nix              # Manifest aggregator (handles both inline YAML and helm source)
     ├── helm-chart.nix           # Generic helm template helper (fetchurl + extract + render)
-    └── env/
-        ├── base.nix             # Namespaces, RBAC, CoreDNS
-        ├── argocd.nix           # ArgoCD Helm chart (v9.5.0) + self-managing Application
-        ├── cilium.nix           # Cilium Helm chart (v1.19.3) + Hubble + Application
-        ├── clickhouse.nix       # ClickHouse 3 Keeper + 2x2 shards + Application
-        ├── foundationdb.nix     # FoundationDB 3 coord + 4 storage + benchmark + Application
-        ├── nginx.nix            # Nginx hello-world + Application
-        ├── tidb.nix             # TiDB 3 PD + 4 TiKV + 2 TiDB + sysbench + Application
-        └── postgres.nix         # CNPG operator (helm) + Cluster CR (1 primary + 3 replicas) + Application
+    ├── env/
+    │   ├── base.nix             # Namespaces, RBAC, CoreDNS
+    │   ├── argocd.nix           # ArgoCD Helm chart (v9.5.0) + self-managing Application
+    │   ├── cilium.nix           # Cilium Helm chart (v1.19.3) + Hubble + Application
+    │   ├── clickhouse.nix       # ClickHouse 3 Keeper + 2x2 shards + Application
+    │   ├── foundationdb.nix     # FoundationDB 3 coord + 4 storage + benchmark + Application
+    │   ├── nginx.nix            # Nginx hello-world + Application
+    │   ├── tidb.nix             # TiDB 3 PD + 4 TiKV + 2 TiDB + sysbench + Application
+    │   ├── postgres.nix         # CNPG operator (helm) + Cluster CR (1 primary + 3 replicas) + Application
+    │   ├── ingress-nginx.nix    # ingress-nginx DaemonSet hostPort 80/443 (anycast-ready)
+    │   ├── cert-manager.nix     # cert-manager + selfsigned-lab ClusterIssuer (phase 1) + stub LE DNS-01 (phase 2)
+    │   └── matrix.nix           # Matrix stack aggregator: Synapse + Element + hookshot + maubot + mautrix-discord
+    └── matrix/
+        ├── shared.nix           # CNPG Database CRs, matrix-tls Certificate, single Ingress (4 hosts)
+        ├── synapse.nix          # Synapse Deployment + ConfigMap + PVC + Services (ClusterIP + admin NodePort)
+        ├── element.nix          # Element Web Deployment + Service
+        ├── hookshot.nix         # matrix-hookshot Deployment + registration/config ConfigMaps + Service
+        ├── maubot.nix           # maubot Deployment + plugins PVC + config ConfigMap + Service
+        └── mautrix-discord.nix  # mautrix-discord Deployment + registration/config ConfigMaps + Service
 rendered/                        # Committed rendered manifests (git-tracked)
 ├── argocd/                      # ArgoCD install.yaml (helm-rendered), values, Application CR
 ├── base/                        # Namespaces, RBAC, CoreDNS
@@ -647,7 +691,10 @@ rendered/                        # Committed rendered manifests (git-tracked)
 ├── fdb/                         # FoundationDB manifests + benchmark
 ├── nginx/                       # Nginx manifests
 ├── tidb/                        # TiDB PD + TiKV + TiDB + sysbench manifests
-└── postgres/                    # local-path-provisioner, CNPG operator (helm-rendered), Cluster CR, NodePort services
+├── postgres/                    # local-path-provisioner, CNPG operator (helm-rendered), Cluster CR, NodePort services
+├── ingress-nginx/               # Upstream-filtered install + DaemonSet overlay + Application
+├── cert-manager/                # Upstream install + selfsigned-lab ClusterIssuer chain + Application
+└── matrix/                      # Synapse, Element, hookshot, maubot, mautrix-discord, Ingress, Certificate, Databases
 ```
 
 ## Design Decisions

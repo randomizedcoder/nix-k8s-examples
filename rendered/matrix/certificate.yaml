@@ -1,0 +1,24 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: matrix-tls
+  namespace: matrix
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  secretName: matrix-tls
+  duration: 2160h   # 90 days (matches future LE)
+  renewBefore: 720h # 30 days
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  dnsNames:
+  - matrix.lab.local
+  - element.lab.local
+  - hookshot.lab.local
+  - maubot.lab.local
+  issuerRef:
+    name: selfsigned-lab
+    kind: ClusterIssuer
+    group: cert-manager.io
+

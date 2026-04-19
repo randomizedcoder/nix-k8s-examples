@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mautrix-discord
+  namespace: matrix
+  annotations:
+    argocd.argoproj.io/sync-wave: "6"
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app: mautrix-discord }
+  template:
+    metadata:
+      labels: { app: mautrix-discord }
+    spec:
+      tolerations:
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+        effect: NoSchedule
+      containers:
+      - name: mautrix-discord
+        image: dock.mau.dev/mautrix/discord:v0.7.2
+        ports:
+        - { name: appservice, containerPort: 29334 }
+        readinessProbe:
+          tcpSocket: { port: 29334 }
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        resources:
+          requests: { cpu: 50m,  memory: 128Mi }
+          limits:   { cpu: 500m, memory: 512Mi }
+        volumeMounts:
+        - { name: config, mountPath: /data/config.yaml, subPath: config.yaml, readOnly: true }
+        - { name: reg,    mountPath: /data/registration.yaml, subPath: registration.yaml, readOnly: true }
+      volumes:
+      - name: config
+        configMap:
+          name: mautrix-discord-config
+          items: [{ key: config.yaml, path: config.yaml }]
+      - name: reg
+        configMap:
+          name: mautrix-discord-registration
+          items: [{ key: registration.yaml, path: registration.yaml }]
+
