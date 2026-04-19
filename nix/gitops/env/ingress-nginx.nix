@@ -44,13 +44,17 @@ let
   filtered = pkgs.runCommand "ingress-nginx-filtered" {
     nativeBuildInputs = [ pkgs.yq-go ];
   } ''
-    yq ea '
-      select(
-        .kind != "Deployment"
-        and
-        (.kind == "Service" and .metadata.name == "ingress-nginx-controller" | not)
-      )
-    ' ${upstreamManifest} > $out
+    # Per-document filter (plain `yq e`, not `yq ea`): drop the
+    # controller Deployment and the LoadBalancer Service named
+    # `ingress-nginx-controller` (keep the admission webhook Service
+    # `ingress-nginx-controller-admission`). Everything else (SA,
+    # ConfigMap, RBAC, IngressClass, admission Job, webhook config) is
+    # preserved.
+    yq e 'select(
+      .kind != "Deployment"
+      and
+      (.kind != "Service" or .metadata.name != "ingress-nginx-controller")
+    )' ${upstreamManifest} > $out
   '';
 in
 {
