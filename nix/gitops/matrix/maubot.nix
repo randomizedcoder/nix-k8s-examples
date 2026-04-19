@@ -114,7 +114,9 @@ in
           name: maubot-plugins
           namespace: ${mns}
           annotations:
-            argocd.argoproj.io/sync-wave: "3"
+            # Same wave as the maubot Deployment so WaitForFirstConsumer
+            # on local-path doesn't deadlock the ArgoCD sync.
+            argocd.argoproj.io/sync-wave: "6"
         spec:
           accessModes: [ReadWriteOnce]
           storageClassName: local-path

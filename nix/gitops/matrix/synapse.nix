@@ -126,7 +126,11 @@ in
           name: synapse-media
           namespace: ${mns}
           annotations:
-            argocd.argoproj.io/sync-wave: "3"
+            # Same wave as the Deployment that mounts it: local-path uses
+            # WaitForFirstConsumer, so the PVC only Binds once a pod
+            # references it. If ArgoCD waited for Bound PVC in an earlier
+            # wave, the sync would deadlock.
+            argocd.argoproj.io/sync-wave: "4"
         spec:
           accessModes: [ReadWriteOnce]
           storageClassName: local-path
