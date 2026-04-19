@@ -1,0 +1,77 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: matrix
+  namespace: matrix
+  annotations:
+    cert-manager.io/cluster-issuer: selfsigned-lab
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+    argocd.argoproj.io/sync-wave: "5"
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - matrix.lab.local
+    - element.lab.local
+    - hookshot.lab.local
+    - maubot.lab.local
+    secretName: matrix-tls
+  rules:
+  # Synapse: homeserver client + (phase-2) federation API, plus
+  # .well-known delegation. Federation paths served by the same
+  # container in phase 1 even though federation is disabled in
+  # homeserver.yaml — lets us flip the switch without re-routing.
+  - host: matrix.lab.local
+    http:
+      paths:
+      - path: /_matrix
+        pathType: Prefix
+        backend:
+          service:
+            name: synapse
+            port: { number: 8008 }
+      - path: /_synapse
+        pathType: Prefix
+        backend:
+          service:
+            name: synapse
+            port: { number: 8008 }
+      - path: /.well-known/matrix
+        pathType: Prefix
+        backend:
+          service:
+            name: synapse
+            port: { number: 8008 }
+  # Element Web (community UI).
+  - host: element.lab.local
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: element
+            port: { number: 80 }
+  # Hookshot webhooks — GitHub/GitLab/Jira POST here.
+  - host: hookshot.lab.local
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: hookshot
+            port: { number: 9000 }
+  # Maubot management UI.
+  - host: maubot.lab.local
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: maubot
+            port: { number: 29316 }
+

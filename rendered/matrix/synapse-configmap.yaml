@@ -1,0 +1,83 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: synapse-config
+  namespace: matrix
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+data:
+  homeserver.yaml: |
+    server_name: "matrix.lab.local"
+    public_baseurl: "https://matrix.lab.local/"
+    pid_file: /data/homeserver.pid
+    web_client_location: https://element.lab.local/
+    report_stats: false
+    signing_key_path: /data/signing.key
+    trusted_key_servers: []
+
+    listeners:
+    - port: 8008
+      tls: false
+      type: http
+      x_forwarded: true
+      bind_addresses: ['0.0.0.0']
+      resources:
+      - names: [client, federation]
+        compress: false
+
+    # NOTE: `database:` is OVERRIDDEN by the Secret-sourced
+    # overlay (matrix-secrets → homeserver.secrets.yaml). The
+    # stub here is a placeholder so `--generate-keys` can parse
+    # the file; Synapse never uses these creds.
+    database:
+      name: psycopg2
+      args:
+        user: app
+        database: synapse
+        host: pg-rw.postgres.svc.cluster.local
+        port: 5432
+        cp_min: 5
+        cp_max: 10
+
+    log_config: /etc/synapse/log.config
+
+    media_store_path: /data/media_store
+    max_upload_size: 50M
+    uploads_path: /data/uploads
+    enable_media_repo: true
+
+    enable_registration: false
+    registration_requires_token: false
+    allow_public_rooms_over_federation: false
+
+    federation_domain_whitelist: []
+    send_federation: false
+
+    app_service_config_files:
+    - /etc/synapse/appservices/hookshot.yaml
+    - /etc/synapse/appservices/maubot.yaml
+    - /etc/synapse/appservices/mautrix-discord.yaml
+
+    url_preview_enabled: false
+    suppress_key_server_warning_on_no_federation: true
+    serve_server_wellknown: true
+    admin_contact: 'mailto:admin@matrix.lab.local'
+  log.config: |
+    version: 1
+    formatters:
+      precise:
+        format: '%(asctime)s - %(name)s - %(lineno)d - %(levelname)s - %(request)s - %(message)s'
+    handlers:
+      console:
+        class: logging.StreamHandler
+        formatter: precise
+    loggers:
+      synapse.storage.SQL:
+        level: INFO
+      synapse.access.http.8008:
+        level: INFO
+    root:
+      level: INFO
+      handlers: [console]
+    disable_existing_loggers: false
+

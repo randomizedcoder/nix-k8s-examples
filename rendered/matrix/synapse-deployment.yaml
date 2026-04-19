@@ -1,0 +1,107 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: synapse
+  namespace: matrix
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: synapse
+  template:
+    metadata:
+      labels:
+        app: synapse
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: k8s-w3
+      tolerations:
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+        effect: NoSchedule
+      initContainers:
+      - name: generate-keys
+        image: matrixdotorg/synapse:v1.119.0
+        command:
+        - sh
+        - -c
+        - |
+          set -e
+          mkdir -p /data/media_store /data/uploads
+          if [ ! -f /data/signing.key ]; then
+            echo "Generating Synapse signing key..."
+            python -m synapse.app.homeserver \
+              --config-path /etc/synapse/homeserver.yaml \
+              --config-path /etc/synapse-secrets/homeserver.secrets.yaml \
+              --generate-keys
+          else
+            echo "signing.key already present, skipping generation"
+          fi
+        volumeMounts:
+        - { name: data,        mountPath: /data }
+        - { name: config,      mountPath: /etc/synapse }
+        - { name: secrets,     mountPath: /etc/synapse-secrets, readOnly: true }
+        - { name: appservices, mountPath: /etc/synapse/appservices, readOnly: true }
+        env:
+        - name: SYNAPSE_CONFIG_PATH
+          value: /etc/synapse/homeserver.yaml
+      containers:
+      - name: synapse
+        image: matrixdotorg/synapse:v1.119.0
+        command:
+        - python
+        - -m
+        - synapse.app.homeserver
+        - --config-path=/etc/synapse/homeserver.yaml
+        - --config-path=/etc/synapse-secrets/homeserver.secrets.yaml
+        ports:
+        - { name: http, containerPort: 8008 }
+        livenessProbe:
+          httpGet: { path: /health, port: 8008 }
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+        readinessProbe:
+          httpGet: { path: /health, port: 8008 }
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+        resources:
+          requests: { cpu: 200m, memory: 512Mi }
+          limits:   { cpu: 2000m, memory: 2Gi }
+        volumeMounts:
+        - { name: data,        mountPath: /data }
+        - { name: config,      mountPath: /etc/synapse }
+        - { name: secrets,     mountPath: /etc/synapse-secrets, readOnly: true }
+        - { name: appservices, mountPath: /etc/synapse/appservices, readOnly: true }
+      volumes:
+      - name: data
+        persistentVolumeClaim: { claimName: synapse-media }
+      - name: config
+        configMap:
+          name: synapse-config
+          items:
+          - { key: homeserver.yaml, path: homeserver.yaml }
+          - { key: log.config,      path: log.config }
+      - name: secrets
+        secret:
+          secretName: matrix-secrets
+          items:
+          - { key: homeserver.secrets.yaml, path: homeserver.secrets.yaml }
+      - name: appservices
+        projected:
+          sources:
+          - configMap:
+              name: hookshot-registration
+              items: [{ key: registration.yaml, path: hookshot.yaml }]
+          - configMap:
+              name: maubot-registration
+              items: [{ key: registration.yaml, path: maubot.yaml }]
+          - configMap:
+              name: mautrix-discord-registration
+              items: [{ key: registration.yaml, path: mautrix-discord.yaml }]
+

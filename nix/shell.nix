@@ -24,6 +24,10 @@ pkgs.mkShell {
     nftables
     iproute2
     curl
+    # Matrix helpers
+    mkcert       # inspect the lab self-signed CA / issue dev certs
+    openssl      # token generation for matrix-secrets bootstrap
+    apacheHttpd  # htpasswd (bcrypt for maubot admin password)
   ];
   shellHook = ''
     echo "K8s MicroVM Cluster Development Shell (3 CP + 1 Worker)"

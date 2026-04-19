@@ -1,0 +1,62 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hookshot-config
+  namespace: matrix
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+    argocd.argoproj.io/compare-options: IgnoreExtraneous
+data:
+  config.yml: |
+    bridge:
+      domain: matrix.lab.local
+      url: http://synapse.matrix.svc.cluster.local:8008
+      mediaUrl: https://matrix.lab.local
+      port: 9993
+      bindAddress: 0.0.0.0
+    passFile: /data/passkey.pem
+    logging:
+      level: info
+      colorize: true
+    listeners:
+    - port: 9000
+      bindAddress: 0.0.0.0
+      resources: [webhooks]
+    generic:
+      enabled: true
+      urlPrefix: https://hookshot.lab.local/webhook
+      allowJsTransformationFunctions: false
+      waitForComplete: false
+      enableHttpGet: false
+    # GitHub config is gated on a Secret the operator creates.
+    # Uncomment and wire up once the GitHub App exists:
+    # github:
+    #   auth:
+    #     id: 123
+    #     privateKeyFile: /data/github-private-key.pem
+    #   webhook:
+    #     secret: REPLACE_ME_GITHUB_WEBHOOK_SECRET
+    feeds:
+      enabled: true
+      pollIntervalSeconds: 600
+    permissions:
+    - actor: matrix.lab.local
+      services:
+      - service: "*"
+        level: admin
+  registration.yaml: |
+    id: hookshot
+    url: http://hookshot.matrix.svc.cluster.local:9993
+    as_token: REPLACE_ME_HOOKSHOT_AS_TOKEN
+    hs_token: REPLACE_ME_HOOKSHOT_HS_TOKEN
+    sender_localpart: hookshot
+    rate_limited: false
+    namespaces:
+      users:
+      - exclusive: true
+        regex: "@_webhooks_.*"
+      aliases:
+      - exclusive: true
+        regex: "#webhooks_.*"
+      rooms: []
+

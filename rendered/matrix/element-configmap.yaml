@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: element-config
+  namespace: matrix
+  annotations:
+    argocd.argoproj.io/sync-wave: "4"
+data:
+  config.json: |
+    {
+      "default_server_config": {
+        "m.homeserver": {
+          "base_url": "https://matrix.lab.local",
+          "server_name": "matrix.lab.local"
+        }
+      },
+      "brand": "Element (lab)",
+      "disable_custom_urls": false,
+      "disable_guests": true,
+      "disable_login_language_selector": false,
+      "disable_3pid_login": true,
+      "default_theme": "dark",
+      "show_labs_settings": true,
+      "features": {},
+      "room_directory": {
+        "servers": ["matrix.lab.local"]
+      }
+    }
+
