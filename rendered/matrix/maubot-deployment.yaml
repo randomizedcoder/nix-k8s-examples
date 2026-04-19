@@ -49,8 +49,11 @@ spec:
         image: dock.mau.dev/maubot/maubot:v0.5.0
         ports:
         - { name: http, containerPort: 29316 }
+        # /_matrix/maubot/v1/version requires auth (returns 401
+        # without a token), so we can't use it for probes. A TCP
+        # check confirms the aiohttp server is up and binding.
         readinessProbe:
-          httpGet: { path: /_matrix/maubot/v1/version, port: 29316 }
+          tcpSocket: { port: 29316 }
           initialDelaySeconds: 30
           periodSeconds: 10
         resources:

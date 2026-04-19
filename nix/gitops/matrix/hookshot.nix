@@ -192,8 +192,11 @@ in
                 ports:
                 - { name: webhook,    containerPort: 9000 }
                 - { name: appservice, containerPort: 9993 }
+                # hookshot doesn't expose a plain-HTTP health endpoint;
+                # TCP liveness on the appservice port is enough to tell
+                # the bridge is up and has loaded its config + passkey.
                 readinessProbe:
-                  httpGet: { path: /health, port: 9002 }
+                  tcpSocket: { port: 9993 }
                   initialDelaySeconds: 15
                   periodSeconds: 10
                 resources:
