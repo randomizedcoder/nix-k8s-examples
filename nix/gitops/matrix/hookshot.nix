@@ -183,7 +183,12 @@ in
               containers:
               - name: hookshot
                 image: ${m.images.hookshot}
-                args: ["node", "/usr/src/app/lib/App/BridgeApp.js", "/etc/hookshot/config.yml", "/etc/hookshot/registration.yaml"]
+                # Image layout (halfshot/matrix-hookshot:6.0.3): the JS
+                # entrypoint lives at /usr/bin/matrix-hookshot/App/BridgeApp.js,
+                # not /usr/src/app/lib/... as older upstream docs suggest.
+                # Confirmed by `kubectl run --image=halfshot/matrix-hookshot:6.0.3 -- find / -name BridgeApp.js`.
+                command: ["node"]
+                args: ["/usr/bin/matrix-hookshot/App/BridgeApp.js", "/etc/hookshot/config.yml", "/etc/hookshot/registration.yaml"]
                 ports:
                 - { name: webhook,    containerPort: 9000 }
                 - { name: appservice, containerPort: 9993 }

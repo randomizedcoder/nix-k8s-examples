@@ -150,6 +150,30 @@ in
               - key: node-role.kubernetes.io/control-plane
                 operator: Exists
                 effect: NoSchedule
+              initContainers:
+              # maubot wants to own /data/config.yaml (it rewrites it in
+              # place at startup with merged defaults, which fails with
+              # "Resource busy" when the file is a read-only subPath
+              # mount). And it expects ./plugins, ./plugins/dbs to exist
+              # relative to /data. Seed both from the ConfigMap template
+              # into the PVC on first boot.
+              - name: prepare-data
+                image: ${m.images.maubot}
+                command:
+                - sh
+                - -c
+                - |
+                  set -e
+                  mkdir -p /data/plugins/dbs /data/trash /data/logs
+                  if [ ! -f /data/config.yaml ]; then
+                    cp /config-template/config.yaml /data/config.yaml
+                  fi
+                  chown -R 1337:1337 /data
+                volumeMounts:
+                - { name: data,            mountPath: /data }
+                - { name: config-template, mountPath: /config-template, readOnly: true }
+                securityContext:
+                  runAsUser: 0
               containers:
               - name: maubot
                 image: ${m.images.maubot}
@@ -157,7 +181,7 @@ in
                 - { name: http, containerPort: 29316 }
                 readinessProbe:
                   httpGet: { path: /_matrix/maubot/v1/version, port: 29316 }
-                  initialDelaySeconds: 10
+                  initialDelaySeconds: 30
                   periodSeconds: 10
                 resources:
                   requests: { cpu: 50m,  memory: 128Mi }
@@ -167,13 +191,20 @@ in
                   value: "1337"
                 - name: GID
                   value: "1337"
+                # PG password out of the ConfigMap — see mautrix-discord.nix
+                # for the rationale (lib/pq respects PGPASSWORD). maubot
+                # uses asyncpg but it also honours PGPASSWORD.
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: matrix-secrets
+                      key: pg_app_password
                 volumeMounts:
-                - { name: data,   mountPath: /data }
-                - { name: config, mountPath: /data/config.yaml, subPath: config.yaml, readOnly: true }
+                - { name: data, mountPath: /data }
               volumes:
               - name: data
                 persistentVolumeClaim: { claimName: maubot-plugins }
-              - name: config
+              - name: config-template
                 configMap:
                   name: maubot-config
                   items: [{ key: config.yaml, path: config.yaml }]

@@ -172,6 +172,7 @@ EOF
       ssh_exec "kubectl -n matrix create secret generic matrix-secrets \
         --from-file=homeserver.secrets.yaml=/tmp/homeserver.secrets.yaml \
         --from-file=registration_shared_secret=/tmp/registration_shared_secret \
+        --from-literal=pg_app_password='$PG_PASS' \
         --from-literal=hookshot_as_token='$HOOKSHOT_AS' \
         --from-literal=hookshot_hs_token='$HOOKSHOT_HS' \
         --from-literal=maubot_as_token='$MAUBOT_AS' \
@@ -184,22 +185,24 @@ EOF
 
       ssh_exec "rm -f /tmp/homeserver.secrets.yaml /tmp/registration_shared_secret"
 
-      # Patch the appservice-registration ConfigMaps with real tokens
-      # (ArgoCD ignoreDifferences on /data keeps these from being reverted).
-      patch_cm() {
-        local cm="$1" reg="$2" as="$3" hs="$4"
-        ssh_exec "kubectl -n matrix create configmap $cm \
-          --from-literal=registration.yaml=\"$reg\" \
-          --dry-run=client -o yaml | kubectl apply -f -" >/dev/null
-      }
-
-      # (patch_cm usage left for operator to manually tailor per deployment;
-      # docs/matrix.md shows the exact form.)
+      # Patching the appservice-registration ConfigMaps with the real
+      # AS/HS tokens is left to the operator — each bridge's
+      # registration.yaml has its own format, and ArgoCD ignoreDifferences
+      # on /data prevents the paste from being reverted. See
+      # docs/matrix.md § "Bootstrapping secrets" for the kubectl form.
       echo ""
-      echo "matrix-secrets created."
+      echo "=== matrix-secrets created ==="
+      echo "Tokens written to the Secret (fetch via kubectl -n matrix get secret matrix-secrets -o yaml):"
+      echo "  hookshot_as_token        : $HOOKSHOT_AS"
+      echo "  hookshot_hs_token        : $HOOKSHOT_HS"
+      echo "  maubot_as_token          : $MAUBOT_AS"
+      echo "  maubot_hs_token          : $MAUBOT_HS"
+      echo "  maubot_unshared_secret   : $MAUBOT_UNSHARED"
+      echo "  mautrix_discord_as_token : $DISCORD_AS"
+      echo "  mautrix_discord_hs_token : $DISCORD_HS"
+      echo ""
       echo "Next: manually patch the appservice-registration ConfigMaps with"
-      echo "the tokens printed above. See docs/matrix.md § 'Activate the"
-      echo "bridges' for the kubectl commands."
+      echo "the tokens above. See docs/matrix.md § 'Bootstrapping secrets'."
     '';
   };
 }

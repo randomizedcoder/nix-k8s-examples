@@ -166,6 +166,17 @@ in
               containers:
               - name: mautrix-discord
                 image: ${m.images.mautrixDiscord}
+                # PG password lives in matrix-secrets (key: pg_app_password,
+                # populated by bootstrap-secrets). The config.yaml URI omits
+                # the password on purpose — mautrix-go uses lib/pq, which
+                # reads PGPASSWORD when no password is present in the URI.
+                # Keeps the ConfigMap free of credentials.
+                env:
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: matrix-secrets
+                      key: pg_app_password
                 ports:
                 - { name: appservice, containerPort: 29334 }
                 readinessProbe:
