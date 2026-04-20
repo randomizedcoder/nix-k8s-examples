@@ -129,12 +129,15 @@ in
           namespace: ${mns}
           annotations:
             cert-manager.io/cluster-issuer: selfsigned-lab
-            nginx.ingress.kubernetes.io/proxy-body-size: "50m"
-            nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
-            nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
             argocd.argoproj.io/sync-wave: "5"
+            # The old nginx.ingress.kubernetes.io/proxy-body-size /
+            # proxy-{read,send}-timeout annotations don't translate to
+            # Cilium's Envoy. Upload cap is enforced server-side by
+            # Synapse's max_upload_size: 50M. If Element reports /sync
+            # disconnects, add a CiliumEnvoyConfig patch for
+            # stream_idle_timeout (Envoy default is 5m, nginx was 10m).
         spec:
-          ingressClassName: nginx
+          ingressClassName: cilium
           tls:
           - hosts:
             - ${m.serverName}

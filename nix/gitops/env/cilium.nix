@@ -142,7 +142,10 @@ in
     {
       name = "cilium/lb-ip-pool.yaml";
       content = ''
-        apiVersion: cilium.io/v2alpha1
+        # v2 is stable for CiliumLoadBalancerIPPool in 1.19; policy below
+        # stays at v2alpha1 because CiliumL2AnnouncementPolicy hasn't
+        # graduated yet.
+        apiVersion: cilium.io/v2
         kind: CiliumLoadBalancerIPPool
         metadata:
           name: lab-lb-pool
