@@ -101,6 +101,19 @@ data:
   # is scheduled.
   operator-prometheus-serve-addr: ":9963"
   enable-metrics: "true"
+  enable-envoy-config: "true"
+  envoy-config-retry-interval: "15s"
+  enable-ingress-controller: "true"
+  enforce-ingress-https: "false"
+  enable-ingress-proxy-protocol: "false"
+  enable-ingress-secrets-sync: "true"
+  ingress-secrets-namespace: "cilium-secrets"
+  ingress-lb-annotation-prefixes: "lbipam.cilium.io nodeipam.cilium.io service.beta.kubernetes.io service.kubernetes.io cloud.google.com"
+  ingress-default-lb-mode: shared
+  ingress-shared-lb-service-name: cilium-ingress
+  ingress-hostnetwork-enabled: "false"
+  ingress-hostnetwork-shared-listener-port: "8080"
+  ingress-hostnetwork-nodelabelselector: ""
   enable-policy-secrets-sync: "true"
   policy-secrets-only-from-secrets-namespace: "true"
   policy-secrets-namespace: "cilium-secrets"
@@ -271,6 +284,8 @@ data:
   vtep-cidr: ""
   vtep-mask: ""
   vtep-mac: ""
+  # Enable L2 announcements
+  enable-l2-announcements: "true"
 
   packetization-layer-pmtud-mode: "blackhole"
   procfs: "/host/proc"
@@ -279,6 +294,8 @@ data:
 
   identity-management-mode: "agent"
   enable-sctp: "false"
+  k8s-client-qps: "10"
+  k8s-client-burst: "20"
   remove-cilium-node-taints: "true"
   set-cilium-node-taints: "true"
   set-cilium-is-up-condition: "true"
@@ -413,6 +430,16 @@ rules:
   - get
   - list
   - watch
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - create
+  - get
+  - update
+  - list
+  - delete
 - apiGroups:
   - apiextensions.k8s.io
   resources:
@@ -568,6 +595,22 @@ rules:
   - get
   - list
   - watch
+  - create
+  - update
+  - delete
+  - patch
+- apiGroups:
+  - "discovery.k8s.io"
+  resources:
+  - endpointslices
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - delete
+  - patch
 - apiGroups:
   - cilium.io
   resources:
@@ -726,6 +769,25 @@ rules:
   - get
   - update
 - apiGroups:
+  - networking.k8s.io
+  resources:
+  - ingresses
+  - ingressclasses
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - ingresses/status # To update ingress status with load balancer IP.
+  # The controller needs to be able to set ingress finalizers to be able to create a CiliumEnvoyConfig
+  # resource that is owned by the ingress, and set blockOwnerDeletion=true in its ownerRef.
+  # This is required when the admission plugin OwnerReferencesPermissionEnforcement is activated.
+  - ingresses/finalizers
+  verbs:
+  - update
+- apiGroups:
   - cilium.io
   resources:
   - ciliumendpointslices
@@ -834,6 +896,24 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
+  name: cilium-ingress-secrets
+  namespace: "cilium-secrets"
+  labels:
+    app.kubernetes.io/part-of: cilium
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - get
+  - list
+  - watch
+---
+# Source: cilium/templates/cilium-agent/role.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
   name: cilium-tlsinterception-secrets
   namespace: "cilium-secrets"
   labels:
@@ -847,6 +927,25 @@ rules:
   - get
   - list
   - watch
+---
+# Source: cilium/templates/cilium-operator/role.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cilium-operator-ingress-secrets
+  namespace: "cilium-secrets"
+  labels:
+    app.kubernetes.io/part-of: cilium
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - create
+  - delete
+  - update
+  - patch
 ---
 # Source: cilium/templates/cilium-operator/role.yaml
 apiVersion: rbac.authorization.k8s.io/v1
@@ -911,6 +1010,23 @@ subjects:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
+  name: cilium-secrets
+  namespace: "cilium-secrets"
+  labels:
+    app.kubernetes.io/part-of: cilium
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cilium-ingress-secrets
+subjects:
+  - kind: ServiceAccount
+    name: "cilium"
+    namespace: kube-system
+---
+# Source: cilium/templates/cilium-agent/rolebinding.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
   name: cilium-tlsinterception-secrets
   namespace: "cilium-secrets"
   labels:
@@ -922,6 +1038,23 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: "cilium"
+  namespace: kube-system
+---
+# Source: cilium/templates/cilium-operator/rolebinding.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cilium-operator-ingress-secrets
+  namespace: "cilium-secrets"
+  labels:
+    app.kubernetes.io/part-of: cilium
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cilium-operator-ingress-secrets
+subjects:
+- kind: ServiceAccount
+  name: "cilium-operator"
   namespace: kube-system
 ---
 # Source: cilium/templates/cilium-operator/rolebinding.yaml
@@ -982,6 +1115,26 @@ spec:
     port: 9964
     protocol: TCP
     targetPort: 9964
+---
+# Source: cilium/templates/cilium-ingress-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: cilium-ingress
+  namespace: kube-system
+  labels:
+    cilium.io/ingress: "true"
+    app.kubernetes.io/part-of: cilium
+spec:
+  ports:
+  - name: http
+    port: 80
+    protocol: TCP
+  - name: https
+    port: 443
+    protocol: TCP
+  type: LoadBalancer
+  externalTrafficPolicy: Cluster
 ---
 # Source: cilium/templates/hubble-relay/service.yaml
 kind: Service
@@ -2129,3 +2282,27 @@ spec:
         name: hubble-ui-nginx-conf
       - name: tmp-dir
         emptyDir: {}
+---
+# Source: cilium/templates/cilium-ingress-class.yaml
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata:
+  name: cilium
+  annotations:
+    ingressclass.kubernetes.io/is-default-class: "true"
+spec:
+  controller: cilium.io/ingress-controller
+---
+# Source: cilium/templates/cilium-ingress-service.yaml
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: cilium-ingress
+  namespace: kube-system
+  labels:
+addressType: IPv4
+endpoints:
+- addresses:
+  - "192.192.192.192"
+ports:
+- port: 9999

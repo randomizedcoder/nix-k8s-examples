@@ -83,6 +83,36 @@ let
       requests:
         cpu: 100m
         memory: 256Mi
+
+    # ─── Ingress (replaces ingress-nginx) ───────────────────────────
+    # Cilium's built-in Envoy serves the cluster's Ingress objects.
+    # Exposed through a single LoadBalancer Service (`cilium-ingress`
+    # in kube-system) whose ExternalIP is assigned from the
+    # CiliumLoadBalancerIPPool below and advertised on the LAN via L2
+    # ARP announcements. Phase-2: swap l2announcements → bgpControlPlane,
+    # same VIP, same Service, same Ingress — no further rewrite.
+    ingressController:
+      enabled: true
+      default: true              # make "cilium" the default IngressClass
+      loadbalancerMode: shared   # one cilium-ingress Service for all Ingresses
+      enforceHttps: false        # redirect at the app layer if needed
+      service:
+        type: LoadBalancer
+
+    # ─── L2 announcements (LAN-scoped VIP advertisement) ────────────
+    # Needed for the LoadBalancer Service above to actually be
+    # reachable from the host without a real cloud LB. Cilium elects a
+    # single agent to ARP-reply for the VIP; on node loss another takes
+    # over (see chaos-failover test).
+    l2announcements:
+      enabled: true
+
+    # L2 announcements talk to the K8s API a lot (leases for VIP
+    # ownership). Bump the client-side QPS/burst per Cilium docs to
+    # avoid throttling with a small cluster + tight leases.
+    k8sClientRateLimit:
+      qps: 10
+      burst: 20
   '';
 
   rendered = helm.renderChart {
@@ -104,6 +134,52 @@ in
     {
       name = "cilium/values.yaml";
       content = valuesYaml;
+    }
+    # ─── LoadBalancer IP pool for cilium-ingress ──────────────────────
+    # Kept as raw YAML (not Helm-templated) so the pool/policy are
+    # co-located with the module that enables the feature. Block is
+    # deliberately small — we only need one VIP today (ingress).
+    {
+      name = "cilium/lb-ip-pool.yaml";
+      content = ''
+        apiVersion: cilium.io/v2alpha1
+        kind: CiliumLoadBalancerIPPool
+        metadata:
+          name: lab-lb-pool
+          annotations:
+            argocd.argoproj.io/sync-wave: "2"
+        spec:
+          blocks:
+          - start: "${constants.cilium.ingress.vipStart}"
+            stop:  "${constants.cilium.ingress.vipStop}"
+      '';
+    }
+    # ─── L2 announcement policy ────────────────────────────────────────
+    # Cilium labels the auto-created cilium-ingress Service with
+    # `cilium.io/ingress: "true"` (confirmed in the rendered install.yaml).
+    # Scoping the selector to that label means we only ARP-announce the
+    # ingress VIP for now — future LB Services need their own policy
+    # (or a broadened selector) to opt in.
+    # The interface name is the VM-side NIC (verified via `ip -br link`
+    # on cp0: enp0s4, the virtio-net device cloud-init renames to).
+    {
+      name = "cilium/l2-announcement-policy.yaml";
+      content = ''
+        apiVersion: cilium.io/v2alpha1
+        kind: CiliumL2AnnouncementPolicy
+        metadata:
+          name: lab-l2
+          annotations:
+            argocd.argoproj.io/sync-wave: "2"
+        spec:
+          serviceSelector:
+            matchLabels:
+              cilium.io/ingress: "true"
+          interfaces:
+          - ${constants.cilium.ingress.nic}
+          externalIPs: true
+          loadBalancerIPs: true
+      '';
     }
     # Path-source Application — ArgoCD applies install.yaml and ignores the
     # Application CR file itself (directory.exclude).

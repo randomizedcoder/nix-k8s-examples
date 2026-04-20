@@ -138,6 +138,29 @@ rec {
     hubbleMetricsPort   = 9965;
   };
 
+  # ─── Cilium Ingress + L2 announcements ─────────────────────────────
+  # Cilium runs the cluster's only L7 proxy (Envoy). The built-in
+  # ingress controller exposes a single LoadBalancer Service
+  # (`cilium-ingress` in kube-system) whose IP is pulled from the
+  # LoadBalancer IP pool below and advertised to the LAN via L2 ARP.
+  # Host /etc/hosts points every matrix/element/hookshot/maubot name
+  # at `vip`. Phase-2: swap L2 for BGP, same VIP.
+  cilium = {
+    ingress = {
+      # Single-IP LB pool. Kept to one IP so the cilium-ingress Service
+      # assignment is deterministic — host /etc/hosts entries point
+      # every Matrix hostname at this IP. Expand the range when a
+      # second LB Service is added.
+      vip      = "10.33.33.50";
+      vipStart = "10.33.33.50";
+      vipStop  = "10.33.33.50";
+      # VM-side NIC name (cloud-init renames virtio-net to enp0s4 on
+      # these guests; verify with `ip -br link` before first apply if
+      # you change the VM image).
+      nic      = "enp0s4";
+    };
+  };
+
   # ─── Helm chart pins (rendered at Nix build time) ──────────────────
   # Update these by running:
   #   nix-prefetch-url --type sha256 <url>
