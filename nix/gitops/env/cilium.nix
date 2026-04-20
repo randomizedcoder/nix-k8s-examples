@@ -146,8 +146,10 @@ in
         kind: CiliumLoadBalancerIPPool
         metadata:
           name: lab-lb-pool
-          annotations:
-            argocd.argoproj.io/sync-wave: "2"
+          # No sync-wave — must land in the same wave as install.yaml
+          # (wave 0). Otherwise ArgoCD blocks waiting for the
+          # cilium-ingress Service to become healthy before applying
+          # the pool that assigns its LoadBalancerIP. Circular dep.
         spec:
           blocks:
           - start: "${constants.cilium.ingress.vipStart}"
@@ -169,8 +171,9 @@ in
         kind: CiliumL2AnnouncementPolicy
         metadata:
           name: lab-l2
-          annotations:
-            argocd.argoproj.io/sync-wave: "2"
+          # Same wave as lb-ip-pool.yaml (wave 0): the pool feeds the
+          # Service EXTERNAL-IP, the policy makes that IP ARP-reachable.
+          # ArgoCD won't mark the Service healthy without both.
         spec:
           serviceSelector:
             matchLabels:
