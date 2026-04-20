@@ -190,17 +190,6 @@ rec {
     hash = "sha256-+rjW6JM+RPivc5hgP7YxIuTqZJDwr4NUkQjWhkft2ek=";
   };
 
-  # ─── ingress-nginx (static installer) ──────────────────────────────
-  # Upstream "cloud" provider deploy.yaml. We patch it in-nix to turn
-  # the Deployment into a DaemonSet with hostPort 80/443 and tolerate
-  # the control-plane taint — every node runs an ingress instance so
-  # the future anycast VIP lands on a local proxy wherever it arrives.
-  ingressNginx = {
-    version = "v1.11.3";
-    url  = "https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.11.3/deploy/static/provider/cloud/deploy.yaml";
-    hash = "sha256-4EPV/eZGr5PjaKfNN512v2ODu5MiKfYa12Ncw4YSTpY=";
-  };
-
   # ─── cert-manager (static installer) ───────────────────────────────
   certManager = {
     version = "v1.16.2";
@@ -276,16 +265,6 @@ rec {
     # NodePort for Synapse admin API (host-reachable for one-shot
     # `register_new_matrix_user` from the dev box).
     synapseAdminNodePort = 30800;
-  };
-
-  # ─── ingress-nginx host ports (DaemonSet, phase-1 stand-in for anycast) ─
-  # ingress-nginx binds hostPort 80/443 on every node. The host-side
-  # haproxy frontend (see network-setup.nix) fans :443 across all 4
-  # node IPs so a browser on the dev host reaches a healthy ingress even
-  # while one node is being killed by the chaos tool.
-  ingress = {
-    hostPortHttp  = 80;
-    hostPortHttps = 443;
   };
 
   # ─── SSH Configuration ─────────────────────────────────────────────
