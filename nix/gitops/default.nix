@@ -25,7 +25,6 @@ let
   tidb         = import (envDir + "/tidb.nix")          { inherit pkgs lib; };
   fdb          = import (envDir + "/foundationdb.nix")  { inherit pkgs lib; };
   postgres     = import (envDir + "/postgres.nix")      { inherit pkgs lib helm; };
-  ingressNginx = import (envDir + "/ingress-nginx.nix") { inherit pkgs lib; };
   certManager  = import (envDir + "/cert-manager.nix")  { inherit pkgs lib; };
   matrix       = import (envDir + "/matrix.nix")        { inherit pkgs lib; };
 
@@ -35,7 +34,6 @@ let
     ++ tidb.manifests
     ++ fdb.manifests
     ++ postgres.manifests
-    ++ ingressNginx.manifests
     ++ certManager.manifests
     ++ matrix.manifests;
 

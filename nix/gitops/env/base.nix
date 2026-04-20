@@ -54,11 +54,6 @@ in
         apiVersion: v1
         kind: Namespace
         metadata:
-          name: ingress-nginx
-        ---
-        apiVersion: v1
-        kind: Namespace
-        metadata:
           name: cert-manager
         ---
         apiVersion: v1
