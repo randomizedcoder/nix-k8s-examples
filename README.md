@@ -2,6 +2,8 @@
 
 HA Kubernetes cluster (3 control planes + 1 worker) running as NixOS MicroVMs with QEMU. All PKI is generated at Nix build time and baked into VM images. Host-side haproxy provides apiserver HA. Uses Cilium CNI (replacing kube-proxy), dual-stack networking, CoreDNS, and GitOps deployment via ArgoCD.
 
+- **Ingress**: Cilium's built-in ingress controller (Envoy), exposed via a single L2-announced LoadBalancer VIP (`10.33.33.50`) — no separate ingress-nginx DaemonSet, no host haproxy HTTP/S fanout. Phase-2 upgrade is a Cilium L2→BGP flip; VIP, Service, and Ingress stay the same.
+
 ## Architecture
 
 ```
@@ -18,6 +20,7 @@ Host Machine (NixOS)
 K8s Internal Networks (Cilium-managed):
   Pod CIDR:     10.244.0.0/16, fd44:44:44::/48
   Service CIDR: 10.96.0.0/12,  fd96:96:96::/108
+  Ingress VIP:  10.33.33.50  (Cilium L2-announced, leader node ARP-replies)
 
 HA: 3-node etcd quorum (tolerates 1 CP failure), haproxy LB for apiserver
 ```
@@ -155,17 +158,17 @@ A CloudNativePG-managed HA PostgreSQL cluster with 1 primary + 3 replicas (one p
 
 | Service | URL | Notes |
 |---------|-----|-------|
-| Element Web | `https://element.lab.local` | Via host haproxy :443 → ingress-nginx (all 4 nodes) |
+| Element Web | `https://element.lab.local` | Cilium Ingress (Envoy) on L2-announced VIP `10.33.33.50` |
 | Synapse client API | `https://matrix.lab.local/_matrix/client/versions` | Same path |
 | Hookshot webhooks | `https://hookshot.lab.local/webhook/` | Same path |
 | maubot admin UI | `https://maubot.lab.local` | Same path |
 | Synapse admin API | `http://10.33.33.10:30800` | NodePort — used by `k8s-matrix-register-user` |
 
-Self-hosted Matrix homeserver (Synapse) + Element Web client + matrix-hookshot (GitHub/GitLab/Jira webhooks) + maubot (bot plugin host) + mautrix-discord (Discord bridge). Serves an open-source community — humans chat, bots automate, external systems post via webhooks. Phase 1 runs on the lab bridge; phase 2 swaps the host haproxy fan-out for a Cilium-BGP anycast VIP. See [docs/matrix.md](docs/matrix.md) for the full operator guide.
+Self-hosted Matrix homeserver (Synapse) + Element Web client + matrix-hookshot (GitHub/GitLab/Jira webhooks) + maubot (bot plugin host) + mautrix-discord (Discord bridge). Serves an open-source community — humans chat, bots automate, external systems post via webhooks. Phase 1 exposes the stack through Cilium Ingress (Envoy) on an L2-announced VIP inside the lab bridge; phase 2 flips Cilium from L2 announcements to BGP control plane — same VIP, same Service, same Ingress. See [docs/matrix.md](docs/matrix.md) for the full operator guide.
 
 ```bash
 # 1. /etc/hosts on the dev host:
-#    10.33.33.1 matrix.lab.local element.lab.local hookshot.lab.local maubot.lab.local
+#    10.33.33.50 matrix.lab.local element.lab.local hookshot.lab.local maubot.lab.local
 
 # 2. Generate secrets (tokens, bcrypt'd maubot admin password) once per cluster:
 nix run .#k8s-matrix-bootstrap-secrets
@@ -377,7 +380,7 @@ nix run .#k8s-render-manifests -- --check
 | **TiDB** | Plain YAML | 3 PD + 4 TiKV + 2 TiDB, MySQL-compatible distributed SQL, sysbench |
 | **PostgreSQL (CNPG)** | Helm-rendered + CR | 1 primary + 3 replicas via CloudNativePG operator, auto-failover |
 | **nginx** | Plain YAML | Hello-world deployment + NodePort service |
-| **ingress-nginx** | Upstream YAML + overlay | DaemonSet on all 4 nodes, hostPort 80/443, anycast-ready |
+| **Cilium Ingress** | Helm-rendered (folded into Cilium) | Envoy-based ingress controller, LoadBalancer Service on L2-announced VIP `10.33.33.50` |
 | **cert-manager** | Upstream YAML + CRs | `selfsigned-lab` ClusterIssuer (phase 1); stub `letsencrypt-prod-dns01` (phase 2) |
 | **Matrix** | Plain YAML + CNPG `Database` CRs | Synapse + Element + hookshot + maubot + mautrix-discord on `matrix.lab.local` |
 
@@ -673,7 +676,6 @@ nix/
     │   ├── nginx.nix            # Nginx hello-world + Application
     │   ├── tidb.nix             # TiDB 3 PD + 4 TiKV + 2 TiDB + sysbench + Application
     │   ├── postgres.nix         # CNPG operator (helm) + Cluster CR (1 primary + 3 replicas) + Application
-    │   ├── ingress-nginx.nix    # ingress-nginx DaemonSet hostPort 80/443 (anycast-ready)
     │   ├── cert-manager.nix     # cert-manager + selfsigned-lab ClusterIssuer (phase 1) + stub LE DNS-01 (phase 2)
     │   └── matrix.nix           # Matrix stack aggregator: Synapse + Element + hookshot + maubot + mautrix-discord
     └── matrix/
@@ -692,7 +694,6 @@ rendered/                        # Committed rendered manifests (git-tracked)
 ├── nginx/                       # Nginx manifests
 ├── tidb/                        # TiDB PD + TiKV + TiDB + sysbench manifests
 ├── postgres/                    # local-path-provisioner, CNPG operator (helm-rendered), Cluster CR, NodePort services
-├── ingress-nginx/               # Upstream-filtered install + DaemonSet overlay + Application
 ├── cert-manager/                # Upstream install + selfsigned-lab ClusterIssuer chain + Application
 └── matrix/                      # Synapse, Element, hookshot, maubot, mautrix-discord, Ingress, Certificate, Databases
 ```

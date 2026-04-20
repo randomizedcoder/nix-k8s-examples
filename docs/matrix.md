@@ -13,7 +13,7 @@ cross-community IM bridge.
 | Webhooks | **matrix-hookshot** | Ingests GitHub / GitLab / Jira / generic webhooks into rooms. |
 | Bots | **maubot** | Web-UI-driven bot host; install plugins (reminder, RSS, karma, sed, …) without writing code. |
 | IM bridge | **mautrix-discord** | Day-1 Discord ↔ Matrix bridge. |
-| Ingress | **ingress-nginx** DaemonSet (hostPort 80/443) | Every node runs an ingress pod — future anycast-ready. |
+| Ingress | **Cilium Ingress** (Envoy) on L2-announced VIP `10.33.33.50` | Single LoadBalancer Service; one node at a time ARP-replies for the VIP. Phase-2 swaps L2 for BGP — same VIP. |
 | TLS | **cert-manager** (`selfsigned-lab` ClusterIssuer) | Phase-1 lab CA. Phase-2 flips to Let's Encrypt DNS-01. |
 | Database | **CNPG** `synapse`, `maubot`, `hookshot`, `mautrix_discord` `Database` CRs inside the existing `pg` cluster | HA for free via the existing Postgres HA. |
 
@@ -25,10 +25,10 @@ implemented.
 | Aspect | Phase 1 (now) | Phase 2 (future) |
 |---|---|---|
 | `server_name` | `matrix.lab.local` (permanent — see "server_name is forever" below) | Same value (permanent); client/federation reachable via DNS + `.well-known` delegation |
-| Ingress frontend | Host haproxy `:80/:443` → fanout to all 4 nodes' `hostPort` | Anycast VIP advertised via Cilium BGP from all 4 nodes |
+| Ingress frontend | Cilium Ingress (Envoy) + LoadBalancer on VIP `10.33.33.50` (L2-announced to the lab bridge) | Same VIP, same Service, same Ingress — just flip Cilium from `l2announcements` to `bgpControlPlane` |
 | TLS | `selfsigned-lab` ClusterIssuer (self-signed ECDSA CA) | `letsencrypt-prod-dns01` (stub already in repo; needs DNS-01 credentials secret) |
-| Federation | Off (`federation = false` in `constants.nix`) | On; `.well-known/matrix/server` served from ingress-nginx ConfigMap |
-| DNS | `/etc/hosts` maps `*.lab.local → 10.33.33.1` (haproxy) | Public DNS A/AAAA records point at the anycast VIP |
+| Federation | Off (`federation = false` in `constants.nix`) | On; `.well-known/matrix/server` served from a ConfigMap behind the same Cilium Ingress |
+| DNS | `/etc/hosts` maps `*.lab.local → 10.33.33.50` (Cilium VIP) | Public DNS A/AAAA records point at the anycast VIP |
 
 Phase-2 cutover — note the permanence caveat below — requires wiping the
 Synapse database so keys/events re-sign under a reachable public hostname.
@@ -91,11 +91,12 @@ Synapse admin NodePort (30800 on any node IP).
 1. Edit `/etc/hosts` on the host machine:
 
    ```
-   10.33.33.1 matrix.lab.local element.lab.local hookshot.lab.local maubot.lab.local
+   10.33.33.50 matrix.lab.local element.lab.local hookshot.lab.local maubot.lab.local
    ```
 
-   (`10.33.33.1` is the host bridge gateway; haproxy on the host fans
-   `:443` out to all 4 nodes' ingress-nginx hostPort.)
+   (`10.33.33.50` is the Cilium Ingress VIP — announced via L2/ARP from
+   whichever cluster node currently holds the L2 lease. The host reaches
+   it directly over the `k8sbr0` bridge, no host-side haproxy fanout.)
 
 2. Trust the lab CA (or accept the browser prompt once):
 
@@ -145,14 +146,17 @@ When public IPs + anycast VIP + public DNS are in place:
    pick a new one (requires wiping the Synapse DB).
 2. `constants.nix`: `matrix.federation = true`; update `matrix.serverName`
    iff going with a new public name.
-3. Enable Cilium BGP: add `CiliumBGPPeeringPolicy` + `CiliumLoadBalancerIPPool`
-   at your anycast VIP. Announce from all 4 nodes.
+3. Flip Cilium from L2 announcements to BGP: disable `l2announcements`,
+   enable `bgpControlPlane`, add a `CiliumBGPPeeringPolicy` alongside the
+   existing `CiliumLoadBalancerIPPool`. Same VIP, same Service, same
+   Ingress — nothing on the Matrix side changes.
 4. `nix/gitops/env/cert-manager.nix`: uncomment the
    `letsencrypt-prod-dns01` ClusterIssuer + the DNS-01 credentials Secret
    (created out-of-band with your DNS provider's API token). Flip the
    `matrix-tls` Certificate's `issuerRef` to `letsencrypt-prod-dns01`.
 5. Add a `.well-known/matrix/server` + `.well-known/matrix/client`
-   ConfigMap served by ingress-nginx at `https://matrix.lab.local/.well-known/matrix/*`.
+   ConfigMap routed through the same Cilium Ingress at
+   `https://matrix.lab.local/.well-known/matrix/*`.
 6. Re-render: `nix run .#k8s-render-manifests`.
 7. Apply: ArgoCD syncs. Watch `kubectl -n matrix logs deploy/synapse`;
    federation handshake appears in logs once public traffic reaches it.
