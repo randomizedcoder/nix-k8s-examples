@@ -129,6 +129,24 @@ hubble --server 10.33.33.10:31245 observe --last 20
 | Cilium Operator metrics | `:9963` | Single instance |
 | Hubble metrics | `:9965` on all nodes | Flow metrics |
 
+### Observability (planned — ClickStack)
+
+Comprehensive visibility — logs, traces, metrics, and Cilium/Hubble flows —
+unified into the existing ClickHouse cluster and surfaced through ClickStack
+UI (upstream project: HyperDX). A single-tier OpenTelemetry Collector
+DaemonSet per node tails pod stdout/stderr, Kubelet stats, host metrics,
+and K8s events; apps export traces to it over a shared hostPath **Unix
+domain socket** (`/var/run/otel/collector.sock`); a `hubble-otel` DS reads
+Cilium Hubble's agent UDS (`/var/run/cilium/hubble.sock`) and forwards over
+UDS to the local collector; Prometheus on cp0 bridges its scrapes via
+loopback `remote_write`. The collector is co-located with a ClickHouse
+replica on every node (the existing `ch4` cluster's podAntiAffinity gives
+us one CH per node) so the final write is `127.0.0.1:9000` loopback TCP —
+ClickHouse has no UDS listener ([CH#22260](https://github.com/ClickHouse/ClickHouse/issues/22260),
+*not planned*), and loopback is the fastest path available there. Design:
+[docs/observability.md](docs/observability.md). Not yet implemented — the
+design document lands first; the manifests follow in a subsequent PR.
+
 ### TiDB (Distributed SQL)
 
 | Service | URL | Notes |
