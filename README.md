@@ -90,7 +90,7 @@ nix run .#k8s-vm-ssh -- --node=cp0 kubectl -n argocd get applications
 |---------|-----|-------|
 | ArgoCD UI | `https://10.33.33.10:30443` | NodePort (any node IP works) |
 
-ArgoCD manages 8 Applications (cilium, argocd, base, clickhouse, foundationdb, nginx, tidb, postgres) via the rendered manifests pattern. After first boot, ArgoCD is the source of truth via git.
+ArgoCD manages 10 Applications (cilium, argocd, base, cert-manager, clickhouse, foundationdb, matrix, nginx, tidb, postgres) via the rendered manifests pattern. After first boot, ArgoCD is the source of truth via git.
 
 ```bash
 # Get the initial admin password
@@ -187,20 +187,63 @@ signed event — changing it later requires wiping the Synapse DB. See docs/matr
 
 | Service | URL | Notes |
 |---------|-----|-------|
-| Hello-world page | `https://hello.lab.local` | nginx behind [TecharoHQ/Anubis](https://github.com/TecharoHQ/anubis) proof-of-work anti-scraper on the same Cilium Ingress VIP `10.33.33.50` |
+| Hello-world page | `https://hello.lab.local/` | Public entry point — served by nginx via Anubis challenge. Browsers get a one-time PoW challenge; subsequent requests are cookie-authenticated |
+| Anubis PoW challenge (same URL) | `https://hello.lab.local/` (no `Anubis` cookie) | First request returns the Anubis HTML challenge page; solving it sets a signed cookie valid for the configured challenge TTL |
+| Anubis metrics (cluster-internal) | `http://anubis.nginx.svc.cluster.local:9090/metrics` | Prometheus-format; not exposed externally |
+| nginx backend (cluster-internal) | `http://nginx.nginx.svc.cluster.local:80/` | ClusterIP only — no NodePort, no external path that bypasses Anubis |
 
-A tiny nginx page exists primarily as a target for Anubis — a proof-of-work reverse proxy that challenges suspicious User-Agents before forwarding to the backend. AI/scraper bot UAs are DENY'd outright; mainstream browsers get a one-time PoW challenge and a signed cookie. nginx's Service is ClusterIP (no NodePort bypass).
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│  Dev host                                                            │
+│     /etc/hosts: 10.33.33.50  hello.lab.local                         │
+│             │                                                        │
+│             ▼   HTTPS :443                                           │
+│  ┌────────────────────┐  TLS terminates                              │
+│  │ Cilium Ingress     │  (cert-manager / selfsigned-lab)             │
+│  │ VIP 10.33.33.50    │                                              │
+│  └─────────┬──────────┘                                              │
+│            │   HTTP :8080                                            │
+│            ▼                                                         │
+│  ┌────────────────────┐  PoW challenge / cookie verify               │
+│  │ anubis (Deployment)│  deny known scraper UAs                      │
+│  │ ClusterIP :8080    │                                              │
+│  └─────────┬──────────┘                                              │
+│            │   HTTP :80                                              │
+│            ▼                                                         │
+│  ┌────────────────────┐  static hello-world                          │
+│  │ nginx (ClusterIP)  │                                              │
+│  └────────────────────┘                                              │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+A tiny nginx page exists primarily as a target for [TecharoHQ/Anubis](https://github.com/TecharoHQ/anubis) — a proof-of-work reverse proxy that challenges suspicious User-Agents before forwarding to the backend. Known AI/scraper UAs (GPTBot, ClaudeBot, CCBot, PerplexityBot, Bytespider, Amazonbot, …) are DENY'd outright; mainstream browsers get a one-time PoW challenge and a signed cookie. nginx's Service is ClusterIP, so there is no NodePort bypass around Anubis.
 
 ```bash
-# Bootstrap Anubis' ED25519 signing key once per cluster (outside git):
+# 1. /etc/hosts on the dev host (append hello.lab.local to the VIP line):
+#    10.33.33.50 matrix.lab.local element.lab.local hookshot.lab.local maubot.lab.local hello.lab.local
+
+# 2. Bootstrap Anubis' ED25519 signing key once per cluster (outside git,
+#    written to the `anubis-secrets` Secret in ns=nginx):
 nix run .#k8s-anubis-bootstrap-secrets
 
-# Rollout-restart the Anubis pod so it picks up the new key:
-kubectl -n nginx rollout restart deploy/anubis
+# 3. Roll out Anubis to pick up the new key:
+nix run .#k8s-vm-ssh -- --node=cp0 \
+  "KUBECONFIG=/var/lib/kubernetes/pki/admin-kubeconfig kubectl -n nginx rollout restart deploy/anubis"
 
-# Smoke-test from the dev host (browser UA → challenge; scraper UA → DENY):
-curl -sk --resolve hello.lab.local:443:10.33.33.50 https://hello.lab.local/ | head
+# 4. Browser: open https://hello.lab.local/ (accept the self-signed cert),
+#    watch the Anubis challenge page, then the hello-world body.
+
+# 5. Smoke-test from the CLI:
+#    - Browser-like UA → HTML challenge page:
+curl -sk --resolve hello.lab.local:443:10.33.33.50 \
+     -A 'Mozilla/5.0' https://hello.lab.local/ | head
+#    - Known scraper UA → DENY (Anubis returns a 403/block page):
+curl -sk --resolve hello.lab.local:443:10.33.33.50 \
+     -A 'GPTBot/1.2 (+https://openai.com/gptbot)' \
+     https://hello.lab.local/ -o /dev/null -w '%{http_code}\n'
 ```
+
+Rotate the Anubis signing key: `nix run .#k8s-anubis-bootstrap-secrets -- --force` (then rollout-restart the Deployment). Tune the policy by editing `botPolicies.yaml` in `nix/gitops/env/nginx.nix` and re-rendering.
 
 ### Chaos / Failover Test
 
@@ -339,7 +382,8 @@ On first boot, a systemd oneshot service (`k8s-gitops-bootstrap`) on cp0 automat
 5. Apply ArgoCD (helm-templated at Nix build time)
    └── Wait for Application CRD + argocd-server rollout
 6. Apply all ArgoCD Application CRs
-   (cilium, argocd, base, clickhouse, foundationdb, nginx, tidb, postgres)
+   (cilium, argocd, base, cert-manager, clickhouse, foundationdb,
+    matrix, nginx, tidb, postgres)
 7. Touch /var/lib/k8s-bootstrap/done (idempotent marker)
 ```
 
