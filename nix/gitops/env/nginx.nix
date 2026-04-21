@@ -1,10 +1,25 @@
 # nix/gitops/env/nginx.nix
 #
-# Nginx Deployment + Service + ConfigMap (hello world).
+# Nginx hello-world, fronted by Anubis (TecharoHQ/anubis) — proof-of-work
+# reverse proxy that blocks AI/scraper bots. Topology:
+#
+#   Cilium Ingress (TLS)  →  anubis:8080 (plaintext)  →  nginx:80
+#                   host: hello.lab.local
+#
+# nginx keeps its existing Deployment + ConfigMap; Service type flips
+# from NodePort to ClusterIP so scrapers can't bypass Anubis via node
+# IPs. Anubis gets a ConfigMap (botPolicies), Deployment, and Service.
+# A dedicated nginx-tls Certificate covers hello.lab.local (phase-1
+# self-signed; phase-2 flips issuerRef to letsencrypt-prod-dns01).
+#
+# Secrets (Anubis ED25519 signing key) live outside git — see
+# `nix run .#k8s-anubis-bootstrap-secrets`.
 #
 { pkgs, lib }:
 let
   constants = import ../../constants.nix;
+  n = constants.nginx;
+  a = constants.anubis;
 in
 {
   manifests = [
@@ -79,9 +94,193 @@ in
           ports:
           - port: 80
             targetPort: 80
-          type: NodePort
+          type: ClusterIP
       '';
     }
+
+    # ─── Anubis bot-policy ConfigMap ────────────────────────────────
+    # Minimal upstream-style policy: allow well-known mainstream
+    # browsers, challenge everything else with PoW. Operator-tuned
+    # once real traffic lands — not load-bearing here.
+    {
+      name = "nginx/anubis-configmap.yaml";
+      content = ''
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: anubis-config
+          namespace: nginx
+        data:
+          botPolicies.yaml: |
+            bots:
+              # Allow common healthchecks / monitors through without PoW.
+              - name: well-known
+                user_agent_regex: ^(curl|kube-probe|Prometheus)/
+                action: ALLOW
+              # Known scraper bots — block outright.
+              - name: ai-scrapers
+                user_agent_regex: (GPTBot|ChatGPT-User|CCBot|anthropic-ai|ClaudeBot|Google-Extended|PerplexityBot|Bytespider|Amazonbot)
+                action: DENY
+              # Mainstream browsers — challenge (proof-of-work).
+              - name: mainstream-browsers
+                user_agent_regex: Mozilla
+                action: CHALLENGE
+              # Catch-all — challenge.
+              - name: default
+                user_agent_regex: .*
+                action: CHALLENGE
+            dnsbl: false
+      '';
+    }
+
+    # ─── Anubis Deployment ──────────────────────────────────────────
+    # Stateless reverse proxy. 1 replica is enough for the lab; scale
+    # horizontally when traffic warrants (challenges are stateless).
+    # TARGET points at the cluster-local nginx Service — plaintext HTTP
+    # inside the cluster, TLS terminates at Cilium Ingress upstream.
+    {
+      name = "nginx/anubis-deployment.yaml";
+      content = ''
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: anubis
+          namespace: nginx
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app: anubis
+          template:
+            metadata:
+              labels:
+                app: anubis
+            spec:
+              containers:
+              - name: anubis
+                image: ${a.image}
+                ports:
+                - name: http
+                  containerPort: ${toString a.port}
+                - name: metrics
+                  containerPort: ${toString a.metrics}
+                env:
+                - name: BIND
+                  value: ":${toString a.port}"
+                - name: METRICS_BIND
+                  value: ":${toString a.metrics}"
+                - name: TARGET
+                  value: "http://nginx.nginx.svc.cluster.local:80"
+                - name: DIFFICULTY
+                  value: "${toString a.difficulty}"
+                - name: POLICY_FNAME
+                  value: "/etc/anubis/botPolicies.yaml"
+                - name: COOKIE_SECURE
+                  value: "true"
+                - name: ED25519_PRIVATE_KEY_HEX
+                  valueFrom:
+                    secretKeyRef:
+                      name: anubis-secrets
+                      key: ed25519_private_key_hex
+                volumeMounts:
+                - name: policy
+                  mountPath: /etc/anubis
+                resources:
+                  requests:
+                    cpu: 50m
+                    memory: 64Mi
+                  limits:
+                    cpu: 500m
+                    memory: 256Mi
+              volumes:
+              - name: policy
+                configMap:
+                  name: anubis-config
+      '';
+    }
+    {
+      name = "nginx/anubis-service.yaml";
+      content = ''
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: anubis
+          namespace: nginx
+        spec:
+          selector:
+            app: anubis
+          ports:
+          - name: http
+            port: ${toString a.port}
+            targetPort: ${toString a.port}
+          - name: metrics
+            port: ${toString a.metrics}
+            targetPort: ${toString a.metrics}
+          type: ClusterIP
+      '';
+    }
+
+    # ─── Self-signed TLS (phase 1) ──────────────────────────────────
+    # Phase-2 flips issuerRef to letsencrypt-prod-dns01 alongside the
+    # matrix-tls Certificate. The Ingress below references this Secret
+    # via tls.secretName.
+    {
+      name = "nginx/certificate.yaml";
+      content = ''
+        apiVersion: cert-manager.io/v1
+        kind: Certificate
+        metadata:
+          name: nginx-tls
+          namespace: nginx
+          annotations:
+            argocd.argoproj.io/sync-wave: "2"
+        spec:
+          secretName: nginx-tls
+          duration: 2160h   # 90 days
+          renewBefore: 720h # 30 days
+          privateKey:
+            algorithm: ECDSA
+            size: 256
+          dnsNames:
+          - ${n.hostName}
+          issuerRef:
+            name: selfsigned-lab
+            kind: ClusterIssuer
+            group: cert-manager.io
+      '';
+    }
+
+    # ─── Ingress (hello.lab.local → anubis → nginx) ────────────────
+    {
+      name = "nginx/ingress.yaml";
+      content = ''
+        apiVersion: networking.k8s.io/v1
+        kind: Ingress
+        metadata:
+          name: nginx
+          namespace: nginx
+          annotations:
+            cert-manager.io/cluster-issuer: selfsigned-lab
+            argocd.argoproj.io/sync-wave: "5"
+        spec:
+          ingressClassName: cilium
+          tls:
+          - hosts:
+            - ${n.hostName}
+            secretName: nginx-tls
+          rules:
+          - host: ${n.hostName}
+            http:
+              paths:
+              - path: /
+                pathType: Prefix
+                backend:
+                  service:
+                    name: anubis
+                    port: { number: ${toString a.port} }
+      '';
+    }
+
     {
       name = "nginx/application.yaml";
       content = ''

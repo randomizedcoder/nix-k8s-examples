@@ -1,0 +1,21 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: nginx-tls
+  namespace: nginx
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  secretName: nginx-tls
+  duration: 2160h   # 90 days
+  renewBefore: 720h # 30 days
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  dnsNames:
+  - hello.lab.local
+  issuerRef:
+    name: selfsigned-lab
+    kind: ClusterIssuer
+    group: cert-manager.io
+

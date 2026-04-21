@@ -210,6 +210,16 @@
             };
           })
 
+          # Anubis operator helpers
+          // (let
+            anubisScripts = import (nixDir + "/anubis-scripts.nix") { inherit pkgs; };
+          in {
+            k8s-anubis-bootstrap-secrets = {
+              type = "app";
+              program = "${anubisScripts.bootstrapSecrets}/bin/k8s-anubis-bootstrap-secrets";
+            };
+          })
+
           # Lifecycle test apps
           // (lifecycle.apps or {})
         );

@@ -228,6 +228,24 @@ rec {
     nodePortHttps = 30443;
   };
 
+  # ─── nginx hello-world site (fronted by Anubis) ───────────────────
+  nginx = {
+    hostName = "hello.lab.local";
+  };
+
+  # ─── Anubis anti-scraper (TecharoHQ/anubis) ───────────────────────
+  # Proof-of-work reverse proxy sitting between Cilium Ingress (TLS)
+  # and the nginx backend (plaintext ClusterIP). Ingress routes
+  # hello.lab.local → anubis:8080 → nginx:80. ED25519 signing key
+  # lives in the `anubis-secrets` Secret (bootstrapped out-of-band by
+  # `nix run .#k8s-anubis-bootstrap-secrets`).
+  anubis = {
+    image      = "ghcr.io/techarohq/anubis:v1.25.0";
+    port       = 8080;   # Anubis HTTP listener (plaintext)
+    metrics    = 9090;   # Prometheus scrape endpoint
+    difficulty = 4;      # leading-zero bits for PoW challenge
+  };
+
   # ─── Matrix homeserver + Element + bridges + bots ─────────────────
   #
   # IMPORTANT: Matrix bakes `serverName` into every signed event. It

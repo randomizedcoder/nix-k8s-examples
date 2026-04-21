@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: anubis-config
+  namespace: nginx
+data:
+  botPolicies.yaml: |
+    bots:
+      # Allow common healthchecks / monitors through without PoW.
+      - name: well-known
+        user_agent_regex: ^(curl|kube-probe|Prometheus)/
+        action: ALLOW
+      # Known scraper bots — block outright.
+      - name: ai-scrapers
+        user_agent_regex: (GPTBot|ChatGPT-User|CCBot|anthropic-ai|ClaudeBot|Google-Extended|PerplexityBot|Bytespider|Amazonbot)
+        action: DENY
+      # Mainstream browsers — challenge (proof-of-work).
+      - name: mainstream-browsers
+        user_agent_regex: Mozilla
+        action: CHALLENGE
+      # Catch-all — challenge.
+      - name: default
+        user_agent_regex: .*
+        action: CHALLENGE
+    dnsbl: false
+

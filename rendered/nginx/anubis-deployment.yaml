@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anubis
+  namespace: nginx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: anubis
+  template:
+    metadata:
+      labels:
+        app: anubis
+    spec:
+      containers:
+      - name: anubis
+        image: ghcr.io/techarohq/anubis:v1.25.0
+        ports:
+        - name: http
+          containerPort: 8080
+        - name: metrics
+          containerPort: 9090
+        env:
+        - name: BIND
+          value: ":8080"
+        - name: METRICS_BIND
+          value: ":9090"
+        - name: TARGET
+          value: "http://nginx.nginx.svc.cluster.local:80"
+        - name: DIFFICULTY
+          value: "4"
+        - name: POLICY_FNAME
+          value: "/etc/anubis/botPolicies.yaml"
+        - name: COOKIE_SECURE
+          value: "true"
+        - name: ED25519_PRIVATE_KEY_HEX
+          valueFrom:
+            secretKeyRef:
+              name: anubis-secrets
+              key: ed25519_private_key_hex
+        volumeMounts:
+        - name: policy
+          mountPath: /etc/anubis
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+      volumes:
+      - name: policy
+        configMap:
+          name: anubis-config
+

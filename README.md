@@ -168,7 +168,7 @@ Self-hosted Matrix homeserver (Synapse) + Element Web client + matrix-hookshot (
 
 ```bash
 # 1. /etc/hosts on the dev host:
-#    10.33.33.50 matrix.lab.local element.lab.local hookshot.lab.local maubot.lab.local
+#    10.33.33.50 matrix.lab.local element.lab.local hookshot.lab.local maubot.lab.local hello.lab.local
 
 # 2. Generate secrets (tokens, bcrypt'd maubot admin password) once per cluster:
 nix run .#k8s-matrix-bootstrap-secrets
@@ -182,6 +182,25 @@ nix run .#k8s-matrix-register-user -- --username=alice
 Permanent decision: `server_name = matrix.lab.local`. Matrix bakes this into every
 signed event — changing it later requires wiping the Synapse DB. See docs/matrix.md
 § "server_name is forever".
+
+### Hello-World (Anubis-protected)
+
+| Service | URL | Notes |
+|---------|-----|-------|
+| Hello-world page | `https://hello.lab.local` | nginx behind [TecharoHQ/Anubis](https://github.com/TecharoHQ/anubis) proof-of-work anti-scraper on the same Cilium Ingress VIP `10.33.33.50` |
+
+A tiny nginx page exists primarily as a target for Anubis — a proof-of-work reverse proxy that challenges suspicious User-Agents before forwarding to the backend. AI/scraper bot UAs are DENY'd outright; mainstream browsers get a one-time PoW challenge and a signed cookie. nginx's Service is ClusterIP (no NodePort bypass).
+
+```bash
+# Bootstrap Anubis' ED25519 signing key once per cluster (outside git):
+nix run .#k8s-anubis-bootstrap-secrets
+
+# Rollout-restart the Anubis pod so it picks up the new key:
+kubectl -n nginx rollout restart deploy/anubis
+
+# Smoke-test from the dev host (browser UA → challenge; scraper UA → DENY):
+curl -sk --resolve hello.lab.local:443:10.33.33.50 https://hello.lab.local/ | head
+```
 
 ### Chaos / Failover Test
 
@@ -379,7 +398,7 @@ nix run .#k8s-render-manifests -- --check
 | **FoundationDB** | Plain YAML | 3 coordinators + 4 storage, triple-ssd replication, benchmark |
 | **TiDB** | Plain YAML | 3 PD + 4 TiKV + 2 TiDB, MySQL-compatible distributed SQL, sysbench |
 | **PostgreSQL (CNPG)** | Helm-rendered + CR | 1 primary + 3 replicas via CloudNativePG operator, auto-failover |
-| **nginx** | Plain YAML | Hello-world deployment + NodePort service |
+| **nginx + Anubis** | Plain YAML | Hello-world page fronted by [TecharoHQ/Anubis](https://github.com/TecharoHQ/anubis) proof-of-work anti-scraper; exposed at `https://hello.lab.local` |
 | **Cilium Ingress** | Helm-rendered (folded into Cilium) | Envoy-based ingress controller, LoadBalancer Service on L2-announced VIP `10.33.33.50` |
 | **cert-manager** | Upstream YAML + CRs | `selfsigned-lab` ClusterIssuer (phase 1); stub `letsencrypt-prod-dns01` (phase 2) |
 | **Matrix** | Plain YAML + CNPG `Database` CRs | Synapse + Element + hookshot + maubot + mautrix-discord on `matrix.lab.local` |

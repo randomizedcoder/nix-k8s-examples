@@ -1,0 +1,25 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: nginx
+  namespace: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: selfsigned-lab
+    argocd.argoproj.io/sync-wave: "5"
+spec:
+  ingressClassName: cilium
+  tls:
+  - hosts:
+    - hello.lab.local
+    secretName: nginx-tls
+  rules:
+  - host: hello.lab.local
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: anubis
+            port: { number: 8080 }
+
