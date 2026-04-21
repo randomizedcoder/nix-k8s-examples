@@ -214,6 +214,57 @@ rec {
     nodePortNative = 30900;  # native on 9000 → host :30900
   };
 
+  # ─── Observability (ClickStack: OTel Collector + HyperDX UI) ───────
+  # Design: docs/observability.md. Implementation lands across 4 PRs:
+  #   PR 1 (this one): namespace + scaffolding constants.
+  #   PR 2: OTel Collector DS + schema-bootstrap Job.
+  #   PR 3: hubble-otel DS + Prometheus remoteWrite bridge.
+  #   PR 4: ClickStack UI + MongoDB + Ingress + bootstrap script.
+  #
+  # Helm chart pins and the clickhouseexporter DDL version are left
+  # empty here and populated by the PR that first references them,
+  # so a `nix build` on PR 1 does not fetch anything new.
+  observability = {
+    namespace   = "observability";
+    udsHostPath = "/var/run/otel";
+
+    collector = {
+      otlpGrpcPort = 4317;   # loopback-TCP OTLP/gRPC fallback receiver
+      promRwPort   = 9411;   # prometheusremotewrite receiver (HTTP loopback)
+      metricsPort  = 8888;   # collector's own /metrics
+      nodePort     = 30411;  # cp0 NodePort for Prom → collector remote_write
+    };
+
+    clickhouse = {
+      database = "otel";
+      cluster  = "ch4";          # must match rendered/clickhouse cluster name
+      user     = "otel";         # writer used by the collector
+      uiUser   = "hyperdx";      # read-only reader used by ClickStack UI
+      ttl = {
+        logs    = "7 DAY";
+        traces  = "3 DAY";
+        metrics = "30 DAY";
+        flows   = "2 DAY";
+      };
+    };
+
+    clickstack = {
+      host             = "clickstack.lab.local";
+      ingressClassName = "cilium";
+      mongoStorageGi   = 1;      # emptyDir in Phase-1; size used by Phase-2 PVC
+    };
+
+    # Populated in PR 2 (collector + hyperdx charts).
+    helmCharts = {
+      # opentelemetryCollector = { version = "..."; url = "..."; hash = "..."; };
+      # hyperdx                = { version = "..."; url = "..."; hash = "..."; };
+    };
+
+    # Version of open-telemetry/opentelemetry-collector-contrib whose
+    # clickhouseexporter canonical DDL is inlined by PR 2's bootstrap Job.
+    # clickhouseExporterVersion = "v0.110.0";  # populated in PR 2
+  };
+
   # ─── Chaos / failover test defaults ────────────────────────────────
   chaos = {
     defaultRounds         = 10;

@@ -60,6 +60,11 @@ in
         kind: Namespace
         metadata:
           name: matrix
+        ---
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: ${constants.observability.namespace}
       '';
     }
     {
