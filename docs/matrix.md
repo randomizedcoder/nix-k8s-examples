@@ -49,8 +49,19 @@ Postgres password, and a bcrypt'd maubot admin password. A one-shot helper
 generates them and stores them in the cluster:
 
 ```bash
-# Generates 8 hex tokens, prompts for the pg 'app' password + maubot admin
-# password, bcrypts the latter, and writes the matrix-secrets K8s Secret.
+# Optional: stash the maubot admin password outside the repo so the
+# bootstrap runs non-interactively. File must be chmod 600 and owned
+# by you; the script refuses anything laxer.
+umask 077
+cat > ~/.ssh/nix-k8s-examples-secrets <<'EOF'
+MAUBOT_ADMIN="your-maubot-admin-password"
+EOF
+chmod 600 ~/.ssh/nix-k8s-examples-secrets
+
+# Generates 10 hex tokens, pulls the pg 'app' password live from the
+# cluster's pg-app Secret, reads MAUBOT_ADMIN from the file above (or
+# prompts if absent), bcrypts it, and writes the matrix-secrets K8s
+# Secret.
 nix run .#k8s-matrix-bootstrap-secrets
 ```
 

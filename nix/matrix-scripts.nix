@@ -107,13 +107,17 @@ in
 
       CP0_IP="${constants.network.ipv4.cp0}"
 
+      # NOTE: `export KUBECONFIG=...; $*` rather than the prefix form
+      # `KUBECONFIG=... $*` — the prefix form only decorates the first
+      # command in a pipeline, so `kubectl ... | kubectl apply -f -`
+      # would run the second kubectl without KUBECONFIG.
       ssh_exec() {
         sshpass -p ${constants.ssh.password} ssh \
           -o StrictHostKeyChecking=no \
           -o UserKnownHostsFile=/dev/null \
           -o LogLevel=ERROR \
           root@"$CP0_IP" \
-          "KUBECONFIG=/var/lib/kubernetes/pki/admin-kubeconfig $*"
+          "export KUBECONFIG=/var/lib/kubernetes/pki/admin-kubeconfig; $*"
       }
 
       if [[ "$FORCE" != "yes" ]] && ssh_exec "kubectl -n matrix get secret matrix-secrets" >/dev/null 2>&1; then
@@ -133,8 +137,41 @@ in
       DISCORD_AS="$(openssl rand -hex 32)"
       DISCORD_HS="$(openssl rand -hex 32)"
 
-      read -rsp "Postgres password for role 'app' (from pg-app secret): " PG_PASS; echo
-      read -rsp "Maubot admin password: " MAUBOT_ADMIN; echo
+      # --- Load operator secrets (optional) --------------------------
+      # Maubot admin password can live in ~/.ssh/nix-k8s-examples-secrets
+      # (kept outside the repo, so never in git). File must be mode
+      # 0600/0400 and owned by the invoking user — the script refuses
+      # to source anything laxer. Missing file / unset var falls back
+      # to an interactive prompt.
+      #
+      # Example contents (chmod 600 after writing):
+      #     MAUBOT_ADMIN="correct horse battery staple"
+      SECRETS_FILE="$HOME/.ssh/nix-k8s-examples-secrets"
+      if [[ -e "$SECRETS_FILE" ]]; then
+        PERMS="$(stat -c '%a %u' "$SECRETS_FILE")"
+        if [[ "$PERMS" != "600 $(id -u)" && "$PERMS" != "400 $(id -u)" ]]; then
+          echo "Refusing to source $SECRETS_FILE: must be mode 0600/0400 and owned by $(id -un)." >&2
+          echo "  Fix: chmod 600 $SECRETS_FILE" >&2
+          exit 1
+        fi
+        # shellcheck source=/dev/null
+        source "$SECRETS_FILE"
+      fi
+
+      # PG_PASS: always pull live from the cluster — the `pg-app`
+      # Secret is the source of truth (managed by CNPG). No on-disk
+      # copy, no paste errors.
+      PG_PASS="$(ssh_exec "kubectl -n postgres get secret pg-app -o jsonpath='{.data.password}'" | base64 -d)"
+      if [[ -z "$PG_PASS" ]]; then
+        echo "Could not fetch pg-app password from cluster. Is postgres up?" >&2
+        exit 1
+      fi
+
+      # MAUBOT_ADMIN: prefer the value sourced from SECRETS_FILE;
+      # otherwise prompt.
+      if [[ -z "''${MAUBOT_ADMIN:-}" ]]; then
+        read -rsp "Maubot admin password: " MAUBOT_ADMIN; echo
+      fi
 
       MAUBOT_BCRYPT="$(htpasswd -nbB admin "$MAUBOT_ADMIN" | cut -d: -f2)"
 
