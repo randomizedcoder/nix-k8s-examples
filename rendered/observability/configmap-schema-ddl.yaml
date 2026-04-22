@@ -1,0 +1,381 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-schema-ddl
+  namespace: observability
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+  labels:
+    app.kubernetes.io/name: otel-schema-bootstrap
+    app.kubernetes.io/part-of: observability
+    observability.nix-k8s-examples/exporter-version: "v0.118.0"
+data:
+  bootstrap.sql: |
+    -- ─── Database ─────────────────────────────────────────────────
+            CREATE DATABASE IF NOT EXISTS otel ON CLUSTER ch4;
+            
+            -- ─── Logs ─────────────────────────────────────────────────────
+            CREATE TABLE IF NOT EXISTS otel.otel_logs ON CLUSTER ch4 (
+                Timestamp DateTime64(9) CODEC(Delta(8), ZSTD(1)),
+                TimestampTime DateTime DEFAULT toDateTime(Timestamp),
+                TraceId String CODEC(ZSTD(1)),
+                SpanId String CODEC(ZSTD(1)),
+                TraceFlags UInt8,
+                SeverityText LowCardinality(String) CODEC(ZSTD(1)),
+                SeverityNumber UInt8,
+                ServiceName LowCardinality(String) CODEC(ZSTD(1)),
+                Body String CODEC(ZSTD(1)),
+                ResourceSchemaUrl LowCardinality(String) CODEC(ZSTD(1)),
+                ResourceAttributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
+                ScopeSchemaUrl LowCardinality(String) CODEC(ZSTD(1)),
+                ScopeName String CODEC(ZSTD(1)),
+                ScopeVersion LowCardinality(String) CODEC(ZSTD(1)),
+                ScopeAttributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
+                LogAttributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
+                INDEX idx_trace_id TraceId TYPE bloom_filter(0.001) GRANULARITY 1,
+                INDEX idx_res_attr_key mapKeys(ResourceAttributes) TYPE bloom_filter(0.01) GRANULARITY 1,
+                INDEX idx_res_attr_value mapValues(ResourceAttributes) TYPE bloom_filter(0.01) GRANULARITY 1,
+                INDEX idx_scope_attr_key mapKeys(ScopeAttributes) TYPE bloom_filter(0.01) GRANULARITY 1,
+                INDEX idx_scope_attr_value mapValues(ScopeAttributes) TYPE bloom_filter(0.01) GRANULARITY 1,
+                INDEX idx_log_attr_key mapKeys(LogAttributes) TYPE bloom_filter(0.01) GRANULARITY 1,
+                INDEX idx_log_attr_value mapValues(LogAttributes) TYPE bloom_filter(0.01) GRANULARITY 1,
+                INDEX idx_body Body TYPE tokenbf_v1(32768, 3, 0) GRANULARITY 8
+            ) ENGINE = ReplicatedMergeTree('/clickhouse/tables/{shard}/otel_logs', '{replica}')
+            PARTITION BY toDate(TimestampTime)
+            PRIMARY KEY (ServiceName, TimestampTime)
+            ORDER BY (ServiceName, TimestampTime, Timestamp)
+            TTL TimestampTime + toIntervalDay(7)
+            SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1;
+            
+            CREATE TABLE IF NOT EXISTS otel.otel_logs_dist ON CLUSTER ch4
+            AS otel.otel_logs
+            ENGINE = Distributed(ch4, otel, otel_logs, cityHash64(ServiceName));
+            
+            -- ─── Traces ───────────────────────────────────────────────────
+            CREATE TABLE IF NOT EXISTS otel.otel_traces ON CLUSTER ch4 (
+                Timestamp DateTime64(9) CODEC(Delta, ZSTD(1)),
+                TraceId String CODEC(ZSTD(1)),
+                SpanId String CODEC(ZSTD(1)),
+                ParentSpanId String CODEC(ZSTD(1)),
+                TraceState String CODEC(ZSTD(1)),
+                SpanName LowCardinality(String) CODEC(ZSTD(1)),
+                SpanKind LowCardinality(String) CODEC(ZSTD(1)),
+                ServiceName LowCardinality(String) CODEC(ZSTD(1)),
+                ResourceAttributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
+                ScopeName String CODEC(ZSTD(1)),
+                ScopeVersion String CODEC(ZSTD(1)),
+                SpanAttributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
+                Duration UInt64 CODEC(ZSTD(1)),
+                StatusCode LowCardinality(String) CODEC(ZSTD(1)),
+                StatusMessage String CODEC(ZSTD(1)),
+                Events Nested (
+                    Timestamp DateTime64(9),
+                    Name LowCardinality(String),
+                    Attributes Map(LowCardinality(String), String)
+                ) CODEC(ZSTD(1)),
+                Links Nested (
+                    TraceId String,
+                    SpanId String,
+                    TraceState String,
+                    Attributes Map(LowCardinality(String), String)
+                ) CODEC(ZSTD(1)),
+                INDEX idx_trace_id TraceId TYPE bloom_filter(0.001) GRANULARITY 1,
+                INDEX idx_res_attr_key mapKeys(ResourceAttributes) TYPE bloom_filter(0.01) GRANULARITY 1,
+                INDEX idx_res_attr_value mapValues(ResourceAttributes) TYPE bloom_filter(0.01) GRANULARITY 1,
+                INDEX idx_span_attr_key mapKeys(SpanAttributes) TYPE bloom_filter(0.01) GRANULARITY 1,
+                INDEX idx_span_attr_value mapValues(SpanAttributes) TYPE bloom_filter(0.01) GRANULARITY 1,
+                INDEX idx_duration Duration TYPE minmax GRANULARITY 1
+            ) ENGINE = ReplicatedMergeTree('/clickhouse/tables/{shard}/otel_traces', '{replica}')
+            PARTITION BY toDate(Timestamp)
+            ORDER BY (ServiceName, SpanName, toDateTime(Timestamp))
+            TTL toDate(Timestamp) + toIntervalDay(3)
+            SETTINGS index_granularity=8192, ttl_only_drop_parts = 1;
+            
+            CREATE TABLE IF NOT EXISTS otel.otel_traces_trace_id_ts ON CLUSTER ch4 (
+                 TraceId String CODEC(ZSTD(1)),
+                 Start DateTime CODEC(Delta, ZSTD(1)),
+                 End DateTime CODEC(Delta, ZSTD(1)),
+                 INDEX idx_trace_id TraceId TYPE bloom_filter(0.01) GRANULARITY 1
+            ) ENGINE = ReplicatedMergeTree('/clickhouse/tables/{shard}/otel_traces_trace_id_ts', '{replica}')
+            PARTITION BY toDate(Start)
+            ORDER BY (TraceId, Start)
+            TTL toDate(Start) + toIntervalDay(3)
+            SETTINGS index_granularity=8192, ttl_only_drop_parts = 1;
+            
+            CREATE MATERIALIZED VIEW IF NOT EXISTS otel.otel_traces_trace_id_ts_mv ON CLUSTER ch4
+            TO otel.otel_traces_trace_id_ts
+            AS SELECT
+                TraceId,
+                min(Timestamp) as Start,
+                max(Timestamp) as End
+            FROM otel.otel_traces
+            WHERE TraceId != ''
+            GROUP BY TraceId;
+            
+            CREATE TABLE IF NOT EXISTS otel.otel_traces_dist ON CLUSTER ch4
+            AS otel.otel_traces
+            ENGINE = Distributed(ch4, otel, otel_traces, cityHash64(TraceId));
+            
+            -- ─── Metrics: gauge ───────────────────────────────────────────
+            CREATE TABLE IF NOT EXISTS otel.otel_metrics_gauge ON CLUSTER ch4 (
+                ResourceAttributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
+                ResourceSchemaUrl String CODEC(ZSTD(1)),
+                ScopeName String CODEC(ZSTD(1)),
+                ScopeVersion String CODEC(ZSTD(1)),
+                ScopeAttributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
+                ScopeDroppedAttrCount UInt32 CODEC(ZSTD(1)),
+                ScopeSchemaUrl String CODEC(ZSTD(1)),
+                ServiceName LowCardinality(String) CODEC(ZSTD(1)),
+                MetricName String CODEC(ZSTD(1)),
+                MetricDescription String CODEC(ZSTD(1)),
+                MetricUnit String CODEC(ZSTD(1)),
+                Attributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
+                StartTimeUnix DateTime64(9) CODEC(Delta, ZSTD(1)),
+                TimeUnix DateTime64(9) CODEC(Delta, ZSTD(1)),
+                Value Float64 CODEC(ZSTD(1)),
+                Flags UInt32 CODEC(ZSTD(1)),
+                Exemplars Nested (
+                    FilteredAttributes Map(LowCardinality(String), String),
+                    TimeUnix DateTime64(9),
+                    Value Float64,
+                    SpanId String,
+                    TraceId String
+                ) CODEC(ZSTD(1)),
+                INDEX idx_res_attr_key mapKeys(ResourceAttributes) TYPE bloom_filter(0.01) GRANULARITY 1,
+                INDEX idx_res_attr_value mapValues(ResourceAttributes) TYPE bloom_filter(0.01) GRANULARITY 1,
+                INDEX idx_scope_attr_key mapKeys(ScopeAttributes) TYPE bloom_filter(0.01) GRANULARITY 1,
+                INDEX idx_scope_attr_value mapValues(ScopeAttributes) TYPE bloom_filter(0.01) GRANULARITY 1,
+                INDEX idx_attr_key mapKeys(Attributes) TYPE bloom_filter(0.01) GRANULARITY 1,
+                INDEX idx_attr_value mapValues(Attributes) TYPE bloom_filter(0.01) GRANULARITY 1
+            ) ENGINE = ReplicatedMergeTree('/clickhouse/tables/{shard}/otel_metrics_gauge', '{replica}')
+            TTL toDateTime(TimeUnix) + toIntervalDay(30)
+            PARTITION BY toDate(TimeUnix)
+            ORDER BY (ServiceName, MetricName, Attributes, toUnixTimestamp64Nano(TimeUnix))
+            SETTINGS index_granularity=8192, ttl_only_drop_parts = 1;
+            
+            CREATE TABLE IF NOT EXISTS otel.otel_metrics_gauge_dist ON CLUSTER ch4
+            AS otel.otel_metrics_gauge
+            ENGINE = Distributed(ch4, otel, otel_metrics_gauge, cityHash64(ServiceName, MetricName));
+            
+            -- ─── Metrics: sum ─────────────────────────────────────────────
+            CREATE TABLE IF NOT EXISTS otel.otel_metrics_sum ON CLUSTER ch4 (
+                ResourceAttributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
+                ResourceSchemaUrl String CODEC(ZSTD(1)),
+                ScopeName String CODEC(ZSTD(1)),
+                ScopeVersion String CODEC(ZSTD(1)),
+                ScopeAttributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
+                ScopeDroppedAttrCount UInt32 CODEC(ZSTD(1)),
+                ScopeSchemaUrl String CODEC(ZSTD(1)),
+                ServiceName LowCardinality(String) CODEC(ZSTD(1)),
+                MetricName String CODEC(ZSTD(1)),
+                MetricDescription String CODEC(ZSTD(1)),
+                MetricUnit String CODEC(ZSTD(1)),
+                Attributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
+                StartTimeUnix DateTime64(9) CODEC(Delta, ZSTD(1)),
+                TimeUnix DateTime64(9) CODEC(Delta, ZSTD(1)),
+                Value Float64 CODEC(ZSTD(1)),
+                Flags UInt32 CODEC(ZSTD(1)),
+                Exemplars Nested (
+                    FilteredAttributes Map(LowCardinality(String), String),
+                    TimeUnix DateTime64(9),
+                    Value Float64,
+                    SpanId String,
+                    TraceId String
+                ) CODEC(ZSTD(1)),
+                AggregationTemporality Int32 CODEC(ZSTD(1)),
+                IsMonotonic Boolean CODEC(Delta, ZSTD(1)),
+                INDEX idx_res_attr_key mapKeys(ResourceAttributes) TYPE bloom_filter(0.01) GRANULARITY 1,
+                INDEX idx_res_attr_value mapValues(ResourceAttributes) TYPE bloom_filter(0.01) GRANULARITY 1,
+                INDEX idx_scope_attr_key mapKeys(ScopeAttributes) TYPE bloom_filter(0.01) GRANULARITY 1,
+                INDEX idx_scope_attr_value mapValues(ScopeAttributes) TYPE bloom_filter(0.01) GRANULARITY 1,
+                INDEX idx_attr_key mapKeys(Attributes) TYPE bloom_filter(0.01) GRANULARITY 1,
+                INDEX idx_attr_value mapValues(Attributes) TYPE bloom_filter(0.01) GRANULARITY 1
+            ) ENGINE = ReplicatedMergeTree('/clickhouse/tables/{shard}/otel_metrics_sum', '{replica}')
+            TTL toDateTime(TimeUnix) + toIntervalDay(30)
+            PARTITION BY toDate(TimeUnix)
+            ORDER BY (ServiceName, MetricName, Attributes, toUnixTimestamp64Nano(TimeUnix))
+            SETTINGS index_granularity=8192, ttl_only_drop_parts = 1;
+            
+            CREATE TABLE IF NOT EXISTS otel.otel_metrics_sum_dist ON CLUSTER ch4
+            AS otel.otel_metrics_sum
+            ENGINE = Distributed(ch4, otel, otel_metrics_sum, cityHash64(ServiceName, MetricName));
+            
+            -- ─── Metrics: summary ─────────────────────────────────────────
+            CREATE TABLE IF NOT EXISTS otel.otel_metrics_summary ON CLUSTER ch4 (
+                ResourceAttributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
+                ResourceSchemaUrl String CODEC(ZSTD(1)),
+                ScopeName String CODEC(ZSTD(1)),
+                ScopeVersion String CODEC(ZSTD(1)),
+                ScopeAttributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
+                ScopeDroppedAttrCount UInt32 CODEC(ZSTD(1)),
+                ScopeSchemaUrl String CODEC(ZSTD(1)),
+                ServiceName LowCardinality(String) CODEC(ZSTD(1)),
+                MetricName String CODEC(ZSTD(1)),
+                MetricDescription String CODEC(ZSTD(1)),
+                MetricUnit String CODEC(ZSTD(1)),
+                Attributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
+                StartTimeUnix DateTime64(9) CODEC(Delta, ZSTD(1)),
+                TimeUnix DateTime64(9) CODEC(Delta, ZSTD(1)),
+                Count UInt64 CODEC(Delta, ZSTD(1)),
+                Sum Float64 CODEC(ZSTD(1)),
+                ValueAtQuantiles Nested(
+                    Quantile Float64,
+                    Value Float64
+                ) CODEC(ZSTD(1)),
+                Flags UInt32 CODEC(ZSTD(1)),
+                INDEX idx_res_attr_key mapKeys(ResourceAttributes) TYPE bloom_filter(0.01) GRANULARITY 1,
+                INDEX idx_res_attr_value mapValues(ResourceAttributes) TYPE bloom_filter(0.01) GRANULARITY 1,
+                INDEX idx_scope_attr_key mapKeys(ScopeAttributes) TYPE bloom_filter(0.01) GRANULARITY 1,
+                INDEX idx_scope_attr_value mapValues(ScopeAttributes) TYPE bloom_filter(0.01) GRANULARITY 1,
+                INDEX idx_attr_key mapKeys(Attributes) TYPE bloom_filter(0.01) GRANULARITY 1,
+                INDEX idx_attr_value mapValues(Attributes) TYPE bloom_filter(0.01) GRANULARITY 1
+            ) ENGINE = ReplicatedMergeTree('/clickhouse/tables/{shard}/otel_metrics_summary', '{replica}')
+            TTL toDateTime(TimeUnix) + toIntervalDay(30)
+            PARTITION BY toDate(TimeUnix)
+            ORDER BY (ServiceName, MetricName, Attributes, toUnixTimestamp64Nano(TimeUnix))
+            SETTINGS index_granularity=8192, ttl_only_drop_parts = 1;
+            
+            CREATE TABLE IF NOT EXISTS otel.otel_metrics_summary_dist ON CLUSTER ch4
+            AS otel.otel_metrics_summary
+            ENGINE = Distributed(ch4, otel, otel_metrics_summary, cityHash64(ServiceName, MetricName));
+            
+            -- ─── Metrics: histogram ───────────────────────────────────────
+            CREATE TABLE IF NOT EXISTS otel.otel_metrics_histogram ON CLUSTER ch4 (
+                ResourceAttributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
+                ResourceSchemaUrl String CODEC(ZSTD(1)),
+                ScopeName String CODEC(ZSTD(1)),
+                ScopeVersion String CODEC(ZSTD(1)),
+                ScopeAttributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
+                ScopeDroppedAttrCount UInt32 CODEC(ZSTD(1)),
+                ScopeSchemaUrl String CODEC(ZSTD(1)),
+                ServiceName LowCardinality(String) CODEC(ZSTD(1)),
+                MetricName String CODEC(ZSTD(1)),
+                MetricDescription String CODEC(ZSTD(1)),
+                MetricUnit String CODEC(ZSTD(1)),
+                Attributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
+                StartTimeUnix DateTime64(9) CODEC(Delta, ZSTD(1)),
+                TimeUnix DateTime64(9) CODEC(Delta, ZSTD(1)),
+                Count UInt64 CODEC(Delta, ZSTD(1)),
+                Sum Float64 CODEC(ZSTD(1)),
+                BucketCounts Array(UInt64) CODEC(ZSTD(1)),
+                ExplicitBounds Array(Float64) CODEC(ZSTD(1)),
+                Exemplars Nested (
+                    FilteredAttributes Map(LowCardinality(String), String),
+                    TimeUnix DateTime64(9),
+                    Value Float64,
+                    SpanId String,
+                    TraceId String
+                ) CODEC(ZSTD(1)),
+                Flags UInt32 CODEC(ZSTD(1)),
+                Min Float64 CODEC(ZSTD(1)),
+                Max Float64 CODEC(ZSTD(1)),
+                AggregationTemporality Int32 CODEC(ZSTD(1)),
+                INDEX idx_res_attr_key mapKeys(ResourceAttributes) TYPE bloom_filter(0.01) GRANULARITY 1,
+                INDEX idx_res_attr_value mapValues(ResourceAttributes) TYPE bloom_filter(0.01) GRANULARITY 1,
+                INDEX idx_scope_attr_key mapKeys(ScopeAttributes) TYPE bloom_filter(0.01) GRANULARITY 1,
+                INDEX idx_scope_attr_value mapValues(ScopeAttributes) TYPE bloom_filter(0.01) GRANULARITY 1,
+                INDEX idx_attr_key mapKeys(Attributes) TYPE bloom_filter(0.01) GRANULARITY 1,
+                INDEX idx_attr_value mapValues(Attributes) TYPE bloom_filter(0.01) GRANULARITY 1
+            ) ENGINE = ReplicatedMergeTree('/clickhouse/tables/{shard}/otel_metrics_histogram', '{replica}')
+            TTL toDateTime(TimeUnix) + toIntervalDay(30)
+            PARTITION BY toDate(TimeUnix)
+            ORDER BY (ServiceName, MetricName, Attributes, toUnixTimestamp64Nano(TimeUnix))
+            SETTINGS index_granularity=8192, ttl_only_drop_parts = 1;
+            
+            CREATE TABLE IF NOT EXISTS otel.otel_metrics_histogram_dist ON CLUSTER ch4
+            AS otel.otel_metrics_histogram
+            ENGINE = Distributed(ch4, otel, otel_metrics_histogram, cityHash64(ServiceName, MetricName));
+            
+            -- ─── Metrics: exponential histogram ───────────────────────────
+            CREATE TABLE IF NOT EXISTS otel.otel_metrics_exponential_histogram ON CLUSTER ch4 (
+                ResourceAttributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
+                ResourceSchemaUrl String CODEC(ZSTD(1)),
+                ScopeName String CODEC(ZSTD(1)),
+                ScopeVersion String CODEC(ZSTD(1)),
+                ScopeAttributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
+                ScopeDroppedAttrCount UInt32 CODEC(ZSTD(1)),
+                ScopeSchemaUrl String CODEC(ZSTD(1)),
+                ServiceName LowCardinality(String) CODEC(ZSTD(1)),
+                MetricName String CODEC(ZSTD(1)),
+                MetricDescription String CODEC(ZSTD(1)),
+                MetricUnit String CODEC(ZSTD(1)),
+                Attributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
+                StartTimeUnix DateTime64(9) CODEC(Delta, ZSTD(1)),
+                TimeUnix DateTime64(9) CODEC(Delta, ZSTD(1)),
+                Count UInt64 CODEC(Delta, ZSTD(1)),
+                Sum Float64 CODEC(ZSTD(1)),
+                Scale Int32 CODEC(ZSTD(1)),
+                ZeroCount UInt64 CODEC(ZSTD(1)),
+                PositiveOffset Int32 CODEC(ZSTD(1)),
+                PositiveBucketCounts Array(UInt64) CODEC(ZSTD(1)),
+                NegativeOffset Int32 CODEC(ZSTD(1)),
+                NegativeBucketCounts Array(UInt64) CODEC(ZSTD(1)),
+                Exemplars Nested (
+                    FilteredAttributes Map(LowCardinality(String), String),
+                    TimeUnix DateTime64(9),
+                    Value Float64,
+                    SpanId String,
+                    TraceId String
+                ) CODEC(ZSTD(1)),
+                Flags UInt32 CODEC(ZSTD(1)),
+                Min Float64 CODEC(ZSTD(1)),
+                Max Float64 CODEC(ZSTD(1)),
+                AggregationTemporality Int32 CODEC(ZSTD(1)),
+                INDEX idx_res_attr_key mapKeys(ResourceAttributes) TYPE bloom_filter(0.01) GRANULARITY 1,
+                INDEX idx_res_attr_value mapValues(ResourceAttributes) TYPE bloom_filter(0.01) GRANULARITY 1,
+                INDEX idx_scope_attr_key mapKeys(ScopeAttributes) TYPE bloom_filter(0.01) GRANULARITY 1,
+                INDEX idx_scope_attr_value mapValues(ScopeAttributes) TYPE bloom_filter(0.01) GRANULARITY 1,
+                INDEX idx_attr_key mapKeys(Attributes) TYPE bloom_filter(0.01) GRANULARITY 1,
+                INDEX idx_attr_value mapValues(Attributes) TYPE bloom_filter(0.01) GRANULARITY 1
+            ) ENGINE = ReplicatedMergeTree('/clickhouse/tables/{shard}/otel_metrics_exponential_histogram', '{replica}')
+            TTL toDateTime(TimeUnix) + toIntervalDay(30)
+            PARTITION BY toDate(TimeUnix)
+            ORDER BY (ServiceName, MetricName, Attributes, toUnixTimestamp64Nano(TimeUnix))
+            SETTINGS index_granularity=8192, ttl_only_drop_parts = 1;
+            
+            CREATE TABLE IF NOT EXISTS otel.otel_metrics_exponential_histogram_dist ON CLUSTER ch4
+            AS otel.otel_metrics_exponential_histogram
+            ENGINE = Distributed(ch4, otel, otel_metrics_exponential_histogram, cityHash64(ServiceName, MetricName));
+            
+            -- ─── Hubble flows ─────────────────────────────────────────────
+            -- Our own schema (not from upstream). PR 3's hubble-otel DS will
+            -- write here. Keep wide-but-sparse; LowCardinality on identity
+            -- fields so disk compresses well even at per-flow granularity.
+            CREATE TABLE IF NOT EXISTS otel.hubble_flows ON CLUSTER ch4 (
+                Timestamp DateTime64(9) CODEC(Delta(8), ZSTD(1)),
+                NodeName LowCardinality(String) CODEC(ZSTD(1)),
+                Verdict LowCardinality(String) CODEC(ZSTD(1)),
+                DropReason LowCardinality(String) CODEC(ZSTD(1)),
+                TrafficDirection LowCardinality(String) CODEC(ZSTD(1)),
+                SourceNamespace LowCardinality(String) CODEC(ZSTD(1)),
+                SourcePod LowCardinality(String) CODEC(ZSTD(1)),
+                SourceWorkload LowCardinality(String) CODEC(ZSTD(1)),
+                SourceIdentity UInt32 CODEC(ZSTD(1)),
+                SourceIP String CODEC(ZSTD(1)),
+                DestinationNamespace LowCardinality(String) CODEC(ZSTD(1)),
+                DestinationPod LowCardinality(String) CODEC(ZSTD(1)),
+                DestinationWorkload LowCardinality(String) CODEC(ZSTD(1)),
+                DestinationIdentity UInt32 CODEC(ZSTD(1)),
+                DestinationIP String CODEC(ZSTD(1)),
+                L4Protocol LowCardinality(String) CODEC(ZSTD(1)),
+                SourcePort UInt16 CODEC(ZSTD(1)),
+                DestinationPort UInt16 CODEC(ZSTD(1)),
+                L7Type LowCardinality(String) CODEC(ZSTD(1)),
+                Attributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
+                RawFlow String CODEC(ZSTD(1)),
+                INDEX idx_verdict Verdict TYPE set(16) GRANULARITY 1,
+                INDEX idx_src_pod SourcePod TYPE bloom_filter(0.01) GRANULARITY 1,
+                INDEX idx_dst_pod DestinationPod TYPE bloom_filter(0.01) GRANULARITY 1
+            ) ENGINE = ReplicatedMergeTree('/clickhouse/tables/{shard}/hubble_flows', '{replica}')
+            PARTITION BY toDate(Timestamp)
+            ORDER BY (SourceNamespace, Timestamp)
+            TTL toDate(Timestamp) + toIntervalDay(2)
+            SETTINGS index_granularity=8192, ttl_only_drop_parts = 1;
+            
+            CREATE TABLE IF NOT EXISTS otel.hubble_flows_dist ON CLUSTER ch4
+            AS otel.hubble_flows
+            ENGINE = Distributed(ch4, otel, hubble_flows, cityHash64(SourceNamespace, SourcePod));
+# NOTE: DDL content indented 12 spaces by the replaceStrings above —
+# 8 stripped as common indent, yielding 4 spaces of block-scalar
+# indent in the final YAML (i.e. nested under `bootstrap.sql: |`).
+

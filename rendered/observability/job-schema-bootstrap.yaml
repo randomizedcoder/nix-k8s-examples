@@ -1,0 +1,59 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: otel-schema-bootstrap
+  namespace: observability
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/hook: Sync
+    # Replace on each sync so DDL changes (new exporter version
+    # bump) get re-applied. Idempotent by construction.
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+  labels:
+    app.kubernetes.io/name: otel-schema-bootstrap
+    app.kubernetes.io/part-of: observability
+spec:
+  backoffLimit: 10
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: otel-schema-bootstrap
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: clickhouse-client
+        image: clickhouse/clickhouse-server:24.3
+        command:
+          - /bin/sh
+          - -c
+          - |
+            set -e
+            # Wait until the cluster-wide Service has endpoints.
+            until clickhouse-client \
+                --host clickhouse.clickhouse.svc.cluster.local \
+                --query "SELECT 1" >/dev/null 2>&1; do
+              echo "waiting for ClickHouse..."
+              sleep 2
+            done
+            echo "applying schema (v0.118.0)..."
+            clickhouse-client \
+                --host clickhouse.clickhouse.svc.cluster.local \
+                --multiquery \
+                --multiline \
+                --queries-file /ddl/bootstrap.sql
+            echo "schema applied."
+        volumeMounts:
+        - name: ddl
+          mountPath: /ddl
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+      volumes:
+      - name: ddl
+        configMap:
+          name: otel-schema-ddl
+

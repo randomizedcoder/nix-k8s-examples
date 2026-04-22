@@ -1,0 +1,234 @@
+mode: daemonset
+
+# Contrib distribution is required for clickhouseexporter and the
+# richer set of receivers we rely on.
+image:
+  repository: otel/opentelemetry-collector-contrib
+  tag: "0.118.0"
+
+command:
+  name: otelcol-contrib
+
+# Presets cover the bulky boilerplate: filelog hostPath mounts,
+# kubeletstats auth, hostmetrics host-proc/sys mounts, and the
+# k8sattributes RBAC + processor. We still override `config` below
+# so the final pipeline is explicit.
+presets:
+  logsCollection:
+    enabled: true
+    includeCollectorLogs: false
+  hostMetrics:
+    enabled: true
+  kubeletMetrics:
+    enabled: true
+  kubernetesAttributes:
+    enabled: true
+  kubernetesEvents:
+    enabled: true
+
+# Pin to the 4 CH nodes so every collector pod sits next to a CH
+# replica on the same host (writes go via 127.0.0.1:9000).
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: kubernetes.io/hostname
+          operator: In
+          values:
+          - k8s-cp0
+          - k8s-cp1
+          - k8s-cp2
+          - k8s-w3
+
+# Tolerate control-plane taints so the DS lands on cp0/cp1/cp2.
+tolerations:
+- key: node-role.kubernetes.io/control-plane
+  operator: Exists
+  effect: NoSchedule
+- key: node-role.kubernetes.io/master
+  operator: Exists
+  effect: NoSchedule
+
+# CH credentials come from the `otel-ch-credentials` Secret
+# (placeholder in PR 2; populated by the bootstrap-secrets script
+# in PR 4). The collector's clickhouse exporter reads
+# CLICKHOUSE_USER / CLICKHOUSE_PASSWORD via ${env:VAR}.
+extraEnvsFrom:
+- secretRef:
+    name: otel-ch-credentials
+
+# UDS hostPath shared with hubble-otel (PR 3) and any trace-
+# producing workload on the same node. DirectoryOrCreate lets the
+# collector own the directory even on a fresh node.
+extraVolumes:
+- name: otel-uds
+  hostPath:
+    path: /var/run/otel
+    type: DirectoryOrCreate
+
+extraVolumeMounts:
+- name: otel-uds
+  mountPath: /var/run/otel
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+  requests:
+    cpu: 100m
+    memory: 256Mi
+
+# Port map — fully overriding the chart defaults. We disable
+# jaeger-* and zipkin (unused, and `zipkin` collides with `promrw`
+# on 9411); keep OTLP gRPC/HTTP for the loopback/in-cluster path;
+# expose the collector's own /metrics and the prom remote_write
+# receiver used by the cp0-only Prometheus hop.
+ports:
+  otlp:
+    enabled: true
+    containerPort: 4317
+    servicePort: 4317
+    protocol: TCP
+  otlp-http:
+    enabled: true
+    containerPort: 4318
+    servicePort: 4318
+    protocol: TCP
+  metrics:
+    enabled: true
+    containerPort: 8888
+    servicePort: 8888
+    protocol: TCP
+  promrw:
+    enabled: true
+    containerPort: 9411
+    servicePort: 9411
+    protocol: TCP
+  jaeger-compact:
+    enabled: false
+  jaeger-thrift:
+    enabled: false
+  jaeger-grpc:
+    enabled: false
+  zipkin:
+    enabled: false
+
+# Full config — replaces (not merges with) the chart's preset
+# defaults for the `receivers`/`processors`/`exporters`/`service`
+# keys. Presets still contribute their RBAC + hostPath volumes.
+config:
+  receivers:
+    # OTLP: primary ingest via UDS (zero-NIC from co-located
+    # workloads) with a loopback TCP fallback for the rare client
+    # that can't do UDS.
+    otlp:
+      protocols:
+        grpc:
+          endpoint: unix:///var/run/otel/collector.sock
+        http:
+          endpoint: 0.0.0.0:4318
+
+    # Second OTLP listener on loopback TCP for the kubelet-
+    # reachable fallback path.
+    otlp/loopback:
+      protocols:
+        grpc:
+          endpoint: 127.0.0.1:4317
+
+    # Prometheus remote_write receiver — used by the cp0-only Prom
+    # remoteWrite hop (PR 3). Bound on 0.0.0.0 because the hop
+    # enters via the NodePort Service → pod IP.
+    prometheusremotewrite:
+      endpoint: 0.0.0.0:9411
+
+  processors:
+    memory_limiter:
+      check_interval: 1s
+      limit_percentage: 75
+      spike_limit_percentage: 25
+
+    batch:
+      timeout: 5s
+      send_batch_size: 8192
+      send_batch_max_size: 16384
+
+    # k8sattributes is wired by the preset; extending here to pull
+    # pod-level labels onto every signal. Matches the design doc's
+    # "resource enrichment" step.
+    k8sattributes:
+      passthrough: false
+      auth_type: serviceAccount
+      pod_association:
+      - sources:
+        - from: resource_attribute
+          name: k8s.pod.ip
+      - sources:
+        - from: connection
+      extract:
+        metadata:
+        - k8s.pod.name
+        - k8s.pod.uid
+        - k8s.namespace.name
+        - k8s.node.name
+        - k8s.deployment.name
+        labels:
+        - tag_name: app
+          key: app.kubernetes.io/name
+          from: pod
+
+  exporters:
+    clickhouse:
+      # Loopback-TCP write: CH native protocol on 127.0.0.1:9000.
+      # The collector runs on the same node as a CH replica by
+      # nodeAffinity, so this never crosses the NIC.
+      endpoint: tcp://127.0.0.1:9000?dial_timeout=10s&compress=lz4
+      database: otel
+      username: "${env:CLICKHOUSE_USER}"
+      password: "${env:CLICKHOUSE_PASSWORD}"
+      # The schema-bootstrap Job owns DDL; exporter must not race
+      # with it (and we target *_dist tables, which the exporter's
+      # CreateSchema path doesn't know about).
+      create_schema: false
+      logs_table_name: otel_logs_dist
+      traces_table_name: otel_traces_dist
+      metrics_tables:
+        gauge:
+          name: otel_metrics_gauge_dist
+        sum:
+          name: otel_metrics_sum_dist
+        summary:
+          name: otel_metrics_summary_dist
+        histogram:
+          name: otel_metrics_histogram_dist
+        exponential_histogram:
+          name: otel_metrics_exponential_histogram_dist
+      ttl: 0s
+      timeout: 10s
+      sending_queue:
+        enabled: true
+        queue_size: 5000
+      retry_on_failure:
+        enabled: true
+        initial_interval: 5s
+        max_interval: 30s
+        max_elapsed_time: 300s
+
+  service:
+    telemetry:
+      metrics:
+        address: 0.0.0.0:8888
+    pipelines:
+      logs:
+        receivers: [otlp, otlp/loopback, filelog, k8s_events]
+        processors: [memory_limiter, k8sattributes, batch]
+        exporters: [clickhouse]
+      traces:
+        receivers: [otlp, otlp/loopback]
+        processors: [memory_limiter, k8sattributes, batch]
+        exporters: [clickhouse]
+      metrics:
+        receivers: [otlp, otlp/loopback, hostmetrics, kubeletstats, prometheusremotewrite]
+        processors: [memory_limiter, k8sattributes, batch]
+        exporters: [clickhouse]
+

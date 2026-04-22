@@ -10,7 +10,8 @@ spec:
     targetRevision: main
     path: rendered/observability
     directory:
-      exclude: 'application.yaml'
+      recurse: false
+      exclude: '{application.yaml,collector-values.yaml}'
   destination:
     server: https://kubernetes.default.svc
     namespace: observability
@@ -18,4 +19,17 @@ spec:
     automated:
       prune: true
       selfHeal: true
+    syncOptions:
+      - ServerSideApply=true
+      - CreateNamespace=true
+      - RespectIgnoreDifferences=true
+  ignoreDifferences:
+    # PR 4's bootstrap-secrets script overwrites this Secret's
+    # data out-of-band. Prevent ArgoCD from reverting real
+    # creds back to the placeholder on every self-heal.
+    - group: ""
+      kind: Secret
+      name: otel-ch-credentials
+      namespace: observability
+      jsonPointers: ["/data", "/stringData"]
 

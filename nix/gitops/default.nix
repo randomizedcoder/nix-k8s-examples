@@ -27,7 +27,7 @@ let
   postgres     = import (envDir + "/postgres.nix")      { inherit pkgs lib helm; };
   certManager  = import (envDir + "/cert-manager.nix")  { inherit pkgs lib; };
   matrix       = import (envDir + "/matrix.nix")        { inherit pkgs lib; };
-  observability = import (envDir + "/observability.nix") { inherit pkgs lib; };
+  observability = import (envDir + "/observability.nix") { inherit pkgs lib helm; };
 
   # Combine all manifests
   allManifests = base.manifests ++ argocd.manifests ++ cilium.manifests

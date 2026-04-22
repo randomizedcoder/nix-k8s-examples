@@ -240,11 +240,12 @@ rec {
       cluster  = "ch4";          # must match rendered/clickhouse cluster name
       user     = "otel";         # writer used by the collector
       uiUser   = "hyperdx";      # read-only reader used by ClickStack UI
+      # TTL in integer days — interpolated into `toIntervalDay(N)` in DDL.
       ttl = {
-        logs    = "7 DAY";
-        traces  = "3 DAY";
-        metrics = "30 DAY";
-        flows   = "2 DAY";
+        logsDays    = 7;
+        tracesDays  = 3;
+        metricsDays = 30;
+        flowsDays   = 2;
       };
     };
 
@@ -254,15 +255,26 @@ rec {
       mongoStorageGi   = 1;      # emptyDir in Phase-1; size used by Phase-2 PVC
     };
 
-    # Populated in PR 2 (collector + hyperdx charts).
+    # Populated in PR 2 (collector) and PR 4 (hyperdx).
     helmCharts = {
-      # opentelemetryCollector = { version = "..."; url = "..."; hash = "..."; };
-      # hyperdx                = { version = "..."; url = "..."; hash = "..."; };
+      # opentelemetry-collector 0.115.0 ships appVersion 0.118.0 — the
+      # contrib image tag we actually run. Keep clickhouseExporterVersion
+      # below in lockstep with appVersion so the inlined DDL matches the
+      # INSERT statements the exporter emits.
+      opentelemetryCollector = {
+        version = "0.115.0";
+        url     = "https://github.com/open-telemetry/opentelemetry-helm-charts/releases/download/opentelemetry-collector-0.115.0/opentelemetry-collector-0.115.0.tgz";
+        hash    = "sha256-zOv5DLMHJnYV9bg0teT4onmJ4xBKlLl7p4FLYNIJdMQ=";
+      };
+      # hyperdx = { version = "..."; url = "..."; hash = "..."; };  # PR 4
     };
 
-    # Version of open-telemetry/opentelemetry-collector-contrib whose
-    # clickhouseexporter canonical DDL is inlined by PR 2's bootstrap Job.
-    # clickhouseExporterVersion = "v0.110.0";  # populated in PR 2
+    # Pinned version of opentelemetry-collector-contrib whose canonical
+    # clickhouseexporter DDL is inlined into the bootstrap Job's
+    # ConfigMap. Keep this in lockstep with the chart's appVersion so
+    # the schema we create matches the INSERT column lists the
+    # collector emits.
+    clickhouseExporterVersion = "v0.118.0";
   };
 
   # ─── Chaos / failover test defaults ────────────────────────────────
