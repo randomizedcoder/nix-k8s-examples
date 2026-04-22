@@ -76,6 +76,19 @@ in
           }) constants.nodeNames;
         }
       ];
+      # Mirror every scrape target into the observability collector via
+      # the cp0 NodePort. The collector's prometheusremotewrite receiver
+      # then funnels the series through the loopback clickhouse exporter
+      # into otel.otel_metrics_*. Only cp0 runs Prometheus, so this hop
+      # exists on exactly one node — matching the NodePort Service in
+      # nix/gitops/env/observability.nix.
+      remoteWrite = [{
+        url = "http://127.0.0.1:${toString constants.observability.collector.nodePort}/api/v1/write";
+        queue_config = {
+          capacity   = 10000;
+          max_shards = 50;
+        };
+      }];
     };
 
     # ─── Grafana ──────────────────────────────────────────────────────
