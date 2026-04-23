@@ -172,10 +172,10 @@ data:
             endpoint: unix:///var/run/otel/collector.sock
           http:
             endpoint: 0.0.0.0:4318
-      otlp/loopback:
+      otlp/cluster:
         protocols:
           grpc:
-            endpoint: 127.0.0.1:4317
+            endpoint: 0.0.0.0:4317
       prometheus:
         config:
           scrape_configs:
@@ -201,7 +201,7 @@ data:
           - batch
           receivers:
           - otlp
-          - otlp/loopback
+          - otlp/cluster
           - filelog
           - k8s_events
         metrics:
@@ -213,7 +213,7 @@ data:
           - batch
           receivers:
           - otlp
-          - otlp/loopback
+          - otlp/cluster
           - hostmetrics
           - kubeletstats
           - prometheusremotewrite
@@ -226,7 +226,7 @@ data:
           - batch
           receivers:
           - otlp
-          - otlp/loopback
+          - otlp/cluster
       telemetry:
         metrics:
           address: 0.0.0.0:8888
@@ -305,7 +305,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/config: 37dc9c097956b2e516b04895254b49a2995d90339d257da5b07b7ae94d6f5ca2
+        checksum/config: 7ca195fe47dbc4139fd8e84a2751aa88eaf4414210dd16f6951a2c5d41ea5db6
         
       labels:
         app.kubernetes.io/name: opentelemetry-collector

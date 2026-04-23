@@ -113,6 +113,18 @@
           // { k8s-gen-certs = certs.genCerts; }
           # Raw PKI store (all certs)
           // { k8s-pki = certs.pkiStore; }
+          # Custom OCI images for the in-cluster Zot registry.
+          # `nix build .#hubble-otel-image` produces a docker-archive
+          # tarball that `k8s-registry-push` feeds to skopeo.
+          // (let
+            hubbleOtel = import (nixDir + "/images/hubble-otel.nix") {
+              inherit pkgs;
+              inherit (pkgs) lib;
+            };
+          in {
+            hubble-otel = hubbleOtel.bin;
+            hubble-otel-image = hubbleOtel.image;
+          })
         );
 
         devShells.default = import (nixDir + "/shell.nix") { inherit pkgs; };

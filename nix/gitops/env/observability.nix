@@ -546,12 +546,16 @@ let
             http:
               endpoint: 0.0.0.0:4318
 
-        # Second OTLP listener on loopback TCP for the kubelet-
-        # reachable fallback path.
-        otlp/loopback:
+        # Second OTLP gRPC listener exposed on the Service ClusterIP
+        # so in-cluster clients that can't do UDS (hubble-otel, ad-hoc
+        # OTLP sources) can reach it without a sidecar hop. Originally
+        # bound to 127.0.0.1 when the only consumer was co-located via
+        # UDS — relaxed to 0.0.0.0 in PR 5b so the hubble-otel DS can
+        # push flows via `otel-collector.observability.svc:4317`.
+        otlp/cluster:
           protocols:
             grpc:
-              endpoint: 127.0.0.1:${toString o.collector.otlpGrpcPort}
+              endpoint: 0.0.0.0:${toString o.collector.otlpGrpcPort}
 
         # Prometheus remote_write receiver — used by the cp0-only Prom
         # remoteWrite hop (PR 3). Bound on 0.0.0.0 because the hop
@@ -637,15 +641,15 @@ let
             address: 0.0.0.0:${toString o.collector.metricsPort}
         pipelines:
           logs:
-            receivers: [otlp, otlp/loopback, filelog, k8s_events]
+            receivers: [otlp, otlp/cluster, filelog, k8s_events]
             processors: [memory_limiter, k8sattributes, batch]
             exporters: [clickhouse]
           traces:
-            receivers: [otlp, otlp/loopback]
+            receivers: [otlp, otlp/cluster]
             processors: [memory_limiter, k8sattributes, batch]
             exporters: [clickhouse]
           metrics:
-            receivers: [otlp, otlp/loopback, hostmetrics, kubeletstats, prometheusremotewrite]
+            receivers: [otlp, otlp/cluster, hostmetrics, kubeletstats, prometheusremotewrite]
             processors: [memory_limiter, k8sattributes, batch]
             exporters: [clickhouse]
   '';
@@ -984,6 +988,114 @@ in
                   service:
                     name: clickstack-app
                     port: { number: 3000 }
+      '';
+    }
+
+    # ─── hubble-otel DaemonSet (sync-wave 3) ────────────────────────
+    # Forwards Hubble L3/L4/L7 flows from the node-local cilium-agent
+    # into the OTel Collector DS, which in turn writes them into the
+    # `otel.hubble_flows*` CH tables created by the schema-bootstrap
+    # Job. Image is built from source by nix/images/hubble-otel.nix
+    # (upstream repo is archived, no published container); pushed into
+    # the in-cluster Zot registry at registry.lab.local/hubble-otel.
+    #
+    # Pod runs on hostNetwork so it can reach the local cilium-agent
+    # Hubble listener at localhost:4244 without a Service hop.
+    # dnsPolicy: ClusterFirstWithHostNet preserves cluster DNS so the
+    # OTLP exporter can resolve otel-collector.observability.svc.
+    {
+      name = "observability/hubble-otel-serviceaccount.yaml";
+      content = ''
+        apiVersion: v1
+        kind: ServiceAccount
+        metadata:
+          name: hubble-otel
+          namespace: ${o.namespace}
+          annotations:
+            argocd.argoproj.io/sync-wave: "3"
+      '';
+    }
+    {
+      name    = "observability/hubble-otel-daemonset.yaml";
+      content = ''
+        apiVersion: apps/v1
+        kind: DaemonSet
+        metadata:
+          name: hubble-otel
+          namespace: ${o.namespace}
+          labels:
+            app.kubernetes.io/name: hubble-otel
+            app.kubernetes.io/component: flow-adapter
+          annotations:
+            argocd.argoproj.io/sync-wave: "3"
+        spec:
+          selector:
+            matchLabels:
+              app.kubernetes.io/name: hubble-otel
+          template:
+            metadata:
+              labels:
+                app.kubernetes.io/name: hubble-otel
+                app.kubernetes.io/component: flow-adapter
+            spec:
+              serviceAccountName: hubble-otel
+              # hostNetwork so `localhost:4244` resolves to the
+              # cilium-agent Hubble listener (cilium-agent also runs
+              # on hostNetwork). ClusterFirstWithHostNet keeps cluster
+              # DNS for the OTLP collector Service lookup.
+              hostNetwork: true
+              dnsPolicy: ClusterFirstWithHostNet
+              # Same placement as the collector DS — every CH node
+              # gets a collector + a hubble-otel side-by-side.
+              affinity:
+                nodeAffinity:
+                  requiredDuringSchedulingIgnoredDuringExecution:
+                    nodeSelectorTerms:
+                    - matchExpressions:
+                      - key: kubernetes.io/hostname
+                        operator: In
+                        values:
+                        - k8s-cp0
+                        - k8s-cp1
+                        - k8s-cp2
+                        - k8s-w3
+              tolerations:
+              - key: node-role.kubernetes.io/control-plane
+                operator: Exists
+                effect: NoSchedule
+              - key: node-role.kubernetes.io/master
+                operator: Exists
+                effect: NoSchedule
+              containers:
+              - name: hubble-otel
+                image: ${constants.observability.hubbleOtel.image}
+                imagePullPolicy: IfNotPresent
+                args:
+                - "-hubble.address=${constants.observability.hubbleOtel.hubbleAddress}"
+                - "-otlp.address=otel-collector.${o.namespace}.svc.cluster.local:${toString o.collector.otlpGrpcPort}"
+                # In-cluster OTLP is plaintext (the collector's
+                # otlp/cluster receiver has no TLS); flip this and
+                # wire certs once mutual TLS lands cluster-wide.
+                - "-otlp.tls.enable=false"
+                # Export both logs and traces — the collector's
+                # logs + traces pipelines both ingest otlp/cluster.
+                - "-logs.export=true"
+                - "-trace.export=true"
+                - "-fallbackServiceNamePrefix=hubble"
+                resources:
+                  requests:
+                    cpu: 50m
+                    memory: 64Mi
+                  limits:
+                    cpu: 500m
+                    memory: 256Mi
+                securityContext:
+                  runAsNonRoot: true
+                  runAsUser: 65532
+                  allowPrivilegeEscalation: false
+                  readOnlyRootFilesystem: true
+                  capabilities:
+                    drop: ["ALL"]
       '';
     }
 

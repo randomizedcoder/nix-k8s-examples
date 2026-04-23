@@ -269,6 +269,7 @@ Rotate the Anubis signing key: `nix run .#k8s-anubis-bootstrap-secrets -- --forc
 |---------|-----|-------|
 | ClickStack UI (HyperDX) | `https://clickstack.lab.local/` | Cilium Ingress + `selfsigned-lab` cert. Backed by the ch4 ClickHouse cluster (`otel` database) and an emptyDir MongoDB. |
 | OTel Collector `/metrics` | `http://<node-ip>:8888/metrics` | Each collector pod's self-telemetry (DS on all 4 CH nodes). |
+| hubble-otel DS | `observability/hubble-otel` | DS on every CH node; reads Hubble L3/L4/L7 flows from the local cilium-agent and exports OTLP to the collector Service. Built from the archived `cilium/hubble-otel` repo via `nix build .#hubble-otel-image` and pushed to the in-cluster Zot registry. |
 | Schema-bootstrap Job | `observability/otel-schema-bootstrap` | ArgoCD sync-wave 1 hook; applies the canonical OTel v0.118 DDL on every sync. |
 
 Unified logs + traces + metrics pipeline: each node runs an OTel Collector DaemonSet that accepts OTLP over a UDS at `/var/run/otel/collector.sock` (zero-NIC ingress from co-located workloads), enriches with k8s attributes, and writes to a co-located ClickHouse replica over loopback TCP (`127.0.0.1:9000`). Prometheus on cp0 mirrors every scrape target into the collector via `prometheusremotewrite`. See [docs/observability.md](docs/observability.md) for the full design.
@@ -280,10 +281,16 @@ Unified logs + traces + metrics pipeline: each node runs an OTel Collector Daemo
 # 2. Provision CH users (otel writer, hyperdx reader) + populate Secrets:
 nix run .#k8s-observability-bootstrap-secrets
 
-# 3. Browse to https://clickstack.lab.local (accept the self-signed cert).
+# 3. Build + push the hubble-otel image into the in-cluster Zot registry.
+#    (Upstream cilium/hubble-otel is archived with no container image,
+#    so we rebuild from source via Go 1.26.)
+IMG=$(nix build .#hubble-otel-image --print-out-paths)
+nix run .#k8s-registry-push -- "$IMG" hubble-otel:6f5fe85
+
+# 4. Browse to https://clickstack.lab.local (accept the self-signed cert).
 ```
 
-Phase-1 scope: MongoDB runs on emptyDir (UI state resets on pod restart); Hubble flow ingest and the read-only browse-only OIDC hook land in follow-up PRs — see docs/observability.md § "Phase-2".
+Phase-1 scope: MongoDB runs on emptyDir (UI state resets on pod restart); the read-only browse-only OIDC hook lands in a follow-up PR — see docs/observability.md § "Phase-2".
 
 ### In-cluster OCI registry (Zot)
 

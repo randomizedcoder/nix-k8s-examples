@@ -288,6 +288,21 @@ rec {
     # the schema we create matches the INSERT column lists the
     # collector emits.
     clickhouseExporterVersion = "v0.118.0";
+
+    # hubble-otel image we push into the in-cluster Zot registry.
+    # Upstream (cilium/hubble-otel) is archived — we rebuild the binary
+    # via `nix build .#hubble-otel-image` from the archived HEAD and
+    # push with `nix run .#k8s-registry-push -- <image> hubble-otel:6f5fe85`.
+    # Keep this pin in lockstep with `nix/images/hubble-otel.nix`.
+    hubbleOtel = {
+      rev      = "6f5fe85ee34f22bc7c151c8a44aacb549e522503";
+      shortRev = "6f5fe85";
+      image    = "registry.lab.local/hubble-otel:6f5fe85";
+      # Local Hubble agent gRPC on every node. Cilium's DaemonSet runs
+      # on hostNetwork, so localhost:4244 from a hostNetwork pod hits
+      # the agent's gRPC listener directly — no Relay hop.
+      hubbleAddress = "localhost:4244";
+    };
   };
 
   # ─── Chaos / failover test defaults ────────────────────────────────

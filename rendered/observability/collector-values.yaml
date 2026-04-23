@@ -129,12 +129,16 @@ config:
         http:
           endpoint: 0.0.0.0:4318
 
-    # Second OTLP listener on loopback TCP for the kubelet-
-    # reachable fallback path.
-    otlp/loopback:
+    # Second OTLP gRPC listener exposed on the Service ClusterIP
+    # so in-cluster clients that can't do UDS (hubble-otel, ad-hoc
+    # OTLP sources) can reach it without a sidecar hop. Originally
+    # bound to 127.0.0.1 when the only consumer was co-located via
+    # UDS — relaxed to 0.0.0.0 in PR 5b so the hubble-otel DS can
+    # push flows via `otel-collector.observability.svc:4317`.
+    otlp/cluster:
       protocols:
         grpc:
-          endpoint: 127.0.0.1:4317
+          endpoint: 0.0.0.0:4317
 
     # Prometheus remote_write receiver — used by the cp0-only Prom
     # remoteWrite hop (PR 3). Bound on 0.0.0.0 because the hop
@@ -220,15 +224,15 @@ config:
         address: 0.0.0.0:8888
     pipelines:
       logs:
-        receivers: [otlp, otlp/loopback, filelog, k8s_events]
+        receivers: [otlp, otlp/cluster, filelog, k8s_events]
         processors: [memory_limiter, k8sattributes, batch]
         exporters: [clickhouse]
       traces:
-        receivers: [otlp, otlp/loopback]
+        receivers: [otlp, otlp/cluster]
         processors: [memory_limiter, k8sattributes, batch]
         exporters: [clickhouse]
       metrics:
-        receivers: [otlp, otlp/loopback, hostmetrics, kubeletstats, prometheusremotewrite]
+        receivers: [otlp, otlp/cluster, hostmetrics, kubeletstats, prometheusremotewrite]
         processors: [memory_limiter, k8sattributes, batch]
         exporters: [clickhouse]
 
