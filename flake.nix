@@ -220,6 +220,16 @@
             };
           })
 
+          # Observability operator helpers
+          // (let
+            observabilityScripts = import (nixDir + "/observability-scripts.nix") { inherit pkgs; };
+          in {
+            k8s-observability-bootstrap-secrets = {
+              type = "app";
+              program = "${observabilityScripts.bootstrapSecrets}/bin/k8s-observability-bootstrap-secrets";
+            };
+          })
+
           # Lifecycle test apps
           // (lifecycle.apps or {})
         );

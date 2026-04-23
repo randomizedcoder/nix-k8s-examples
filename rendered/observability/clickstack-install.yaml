@@ -1,0 +1,219 @@
+---
+# Source: clickstack/templates/secrets.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: clickstack-app-secrets
+  labels:
+    helm.sh/chart: clickstack-1.1.1
+    app.kubernetes.io/name: clickstack
+    app.kubernetes.io/instance: clickstack
+    app.kubernetes.io/version: "2.8.0"
+    app.kubernetes.io/managed-by: Helm
+type: Opaque
+data:
+  api-key: eHh4eHh4eHgteHh4eC14eHh4LXh4eHgteHh4eHh4eHh4eHh4
+---
+# Source: clickstack/templates/configmaps/app-configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: clickstack-app-config
+  labels:
+    helm.sh/chart: clickstack-1.1.1
+    app.kubernetes.io/name: clickstack
+    app.kubernetes.io/instance: clickstack
+    app.kubernetes.io/version: "2.8.0"
+    app.kubernetes.io/managed-by: Helm
+data:
+  APP_PORT: "3000"
+  API_PORT: "8000"
+  FRONTEND_URL: "https://clickstack.lab.local"
+  HYPERDX_API_PORT: "8000"
+  HYPERDX_APP_PORT: "3000"
+  HYPERDX_LOG_LEVEL: "info"
+  MINER_API_URL: "http://clickstack-miner:5123"
+  MONGO_URI: "mongodb://clickstack-mongodb:27017/hyperdx"
+  OTEL_SERVICE_NAME: "hdx-oss-api"
+  USAGE_STATS_ENABLED: "true"
+  RUN_SCHEDULED_TASKS_EXTERNALLY: "false"
+  OPAMP_PORT: "4320"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://clickstack-otel-collector:4318"
+---
+# Source: clickstack/templates/hyperdx-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: clickstack-app
+  labels:
+    helm.sh/chart: clickstack-1.1.1
+    app.kubernetes.io/name: clickstack
+    app.kubernetes.io/instance: clickstack
+    app.kubernetes.io/version: "2.8.0"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  type: ClusterIP
+  ports:
+    - port: 3000
+      targetPort: 3000
+      name: app
+    - port: 4320
+      targetPort: 4320
+      name: opamp
+  selector:
+    app.kubernetes.io/name: clickstack
+    app.kubernetes.io/instance: clickstack
+    app: clickstack
+---
+# Source: clickstack/templates/mongodb-deployment.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: clickstack-mongodb
+  labels:
+    helm.sh/chart: clickstack-1.1.1
+    app.kubernetes.io/name: clickstack
+    app.kubernetes.io/instance: clickstack
+    app.kubernetes.io/version: "2.8.0"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  ports:
+    - port: 27017
+      targetPort: 27017
+  selector:
+    app.kubernetes.io/name: clickstack
+    app.kubernetes.io/instance: clickstack
+    app: mongodb
+---
+# Source: clickstack/templates/hyperdx-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: clickstack-app
+  labels:
+    helm.sh/chart: clickstack-1.1.1
+    app.kubernetes.io/name: clickstack
+    app.kubernetes.io/instance: clickstack
+    app.kubernetes.io/version: "2.8.0"
+    app.kubernetes.io/managed-by: Helm
+    app: clickstack
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: clickstack
+      app.kubernetes.io/instance: clickstack
+      app: clickstack
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: clickstack
+        app.kubernetes.io/instance: clickstack
+        app: clickstack
+      annotations:
+    spec:
+      initContainers:
+        - name: wait-for-mongodb
+          image: busybox@sha256:1fcf5df59121b92d61e066df1788e8df0cc35623f5d62d9679a41e163b6a0cdb
+          imagePullPolicy: IfNotPresent
+          command: ['sh', '-c', 'until nc -z clickstack-mongodb 27017; do echo waiting for mongodb; sleep 2; done;']
+      containers:
+        - name: app
+          image: "docker.hyperdx.io/hyperdx/hyperdx:2.8.0"
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: app-port
+              containerPort: 3000
+            - name: api-port
+              containerPort: 8000
+            - name: opamp-port
+              containerPort: 4320
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 1
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          envFrom:
+            - configMapRef:
+                name: clickstack-app-config
+          env:
+            - name: HYPERDX_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: clickstack-app-secrets
+                  key: api-key
+            - name: DEFAULT_CONNECTIONS
+              valueFrom:
+                secretKeyRef:
+                  name: "clickstack-hyperdx-config"
+                  key: "connections.json"
+                  optional: false
+            - name: DEFAULT_SOURCES
+              valueFrom:
+                secretKeyRef:
+                  name: "clickstack-hyperdx-config"
+                  key: "sources.json"
+                  optional: false
+---
+# Source: clickstack/templates/mongodb-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: clickstack-mongodb
+  labels:
+    helm.sh/chart: clickstack-1.1.1
+    app.kubernetes.io/name: clickstack
+    app.kubernetes.io/instance: clickstack
+    app.kubernetes.io/version: "2.8.0"
+    app.kubernetes.io/managed-by: Helm
+    app: mongodb
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: clickstack
+      app.kubernetes.io/instance: clickstack
+      app: mongodb
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: clickstack
+        app.kubernetes.io/instance: clickstack
+        app: mongodb
+    spec:
+      containers:
+        - name: mongodb
+          image: "mongo:5.0.32-focal"
+          ports:
+            - containerPort: 27017
+          livenessProbe:
+            tcpSocket:
+              port: 27017
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            tcpSocket:
+              port: 27017
+            initialDelaySeconds: 1
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          volumeMounts:
+            - name: mongodb-data
+              mountPath: /data/db
+      volumes:
+        - name: mongodb-data
+          emptyDir: {}

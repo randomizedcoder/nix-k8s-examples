@@ -1,0 +1,36 @@
+global:
+  storageClassName: "local-path"
+
+hyperdx:
+  replicas: 1
+  # frontendUrl is what HyperDX bakes into OAuth redirects + UI
+  # links. Must match the Ingress host.
+  appUrl: "https://clickstack.lab.local"
+  frontendUrl: "https://clickstack.lab.local"
+  # Pull connections.json + sources.json from a Secret we populate
+  # out-of-band via the bootstrap script. This points HyperDX at
+  # the ch4 CH cluster + the `otel.*` tables.
+  useExistingConfigSecret: true
+  existingConfigSecret: "clickstack-hyperdx-config"
+  existingConfigConnectionsKey: "connections.json"
+  existingConfigSourcesKey: "sources.json"
+  # Chart ingress is nginx-annotated and would collide with the
+  # Cilium Ingress we emit below. Disable and own the Ingress.
+  ingress:
+    enabled: false
+
+mongodb:
+  enabled: true
+  persistence:
+    enabled: false
+
+# Our ch4 cluster + PR 2 collector DS already own these.
+clickhouse:
+  enabled: false
+otel:
+  enabled: false
+
+# No periodic alert-check CronJobs in Phase-1.
+tasks:
+  enabled: false
+

@@ -5,11 +5,17 @@
 # database) → ClickStack UI (HyperDX). Design: docs/observability.md.
 #
 # This file grows across four PRs:
-#   PR 1: ArgoCD Application scaffold + namespace (landed).
-#   PR 2 (this commit): OTel Collector DaemonSet + schema-bootstrap Job
-#                       + placeholder CH credentials Secret.
-#   PR 3: hubble-otel DaemonSet + Prometheus remoteWrite bridge.
-#   PR 4: ClickStack UI + MongoDB + Ingress + bootstrap-secrets script.
+#   PR 1:  ArgoCD Application scaffold + namespace (landed).
+#   PR 2:  OTel Collector DaemonSet + schema-bootstrap Job + placeholder
+#          CH credentials Secret (landed).
+#   PR 3:  split — PR 3a (Prom remoteWrite in nix/monitoring-module.nix,
+#          landed) and PR 3b (hubble-otel DS, deferred — upstream image
+#          is archived).
+#   PR 4 (this commit): ClickStack UI (HyperDX + chart-provided MongoDB)
+#                       + Cilium Ingress + Certificate + placeholder
+#                       hyperdx-config Secret. Real CH creds land via
+#                       the bootstrap-secrets script in
+#                       nix/observability-scripts.nix.
 #
 { pkgs, lib, helm }:
 let
@@ -651,6 +657,59 @@ let
     chart       = o.helmCharts.opentelemetryCollector;
     values      = collectorValues;
   };
+
+  # ─── ClickStack (HyperDX UI + MongoDB) helm values ─────────────────
+  # The clickstack chart is all-in-one, so we disable the subcharts
+  # we already own: ClickHouse (ch4) and the OTel Collector (PR 2 DS).
+  # MongoDB stays in-chart with `persistence.enabled=false` (emptyDir
+  # — Phase-1 only; session/saved-search state is ephemeral). The
+  # hand-written Cilium Ingress + Certificate below replace the chart's
+  # nginx-annotated Ingress template.
+  clickstackValues = ''
+    global:
+      storageClassName: "local-path"
+
+    hyperdx:
+      replicas: 1
+      # frontendUrl is what HyperDX bakes into OAuth redirects + UI
+      # links. Must match the Ingress host.
+      appUrl: "https://${o.clickstack.host}"
+      frontendUrl: "https://${o.clickstack.host}"
+      # Pull connections.json + sources.json from a Secret we populate
+      # out-of-band via the bootstrap script. This points HyperDX at
+      # the ch4 CH cluster + the `otel.*` tables.
+      useExistingConfigSecret: true
+      existingConfigSecret: "clickstack-hyperdx-config"
+      existingConfigConnectionsKey: "connections.json"
+      existingConfigSourcesKey: "sources.json"
+      # Chart ingress is nginx-annotated and would collide with the
+      # Cilium Ingress we emit below. Disable and own the Ingress.
+      ingress:
+        enabled: false
+
+    mongodb:
+      enabled: true
+      persistence:
+        enabled: false
+
+    # Our ch4 cluster + PR 2 collector DS already own these.
+    clickhouse:
+      enabled: false
+    otel:
+      enabled: false
+
+    # No periodic alert-check CronJobs in Phase-1.
+    tasks:
+      enabled: false
+  '';
+
+  clickstackRendered = helm.renderChart {
+    name        = "clickstack";
+    releaseName = "clickstack";
+    namespace   = o.namespace;
+    chart       = o.helmCharts.clickstack;
+    values      = clickstackValues;
+  };
 in
 {
   manifests = [
@@ -825,6 +884,109 @@ in
       '';
     }
 
+    # ─── ClickStack UI (HyperDX + MongoDB) ───────────────────────────
+    # sync-wave 4: lands after the collector (wave 2). The UI only
+    # reads from CH via the `hyperdx` role, so it tolerates an empty
+    # otel.* schema — no hard dependency on the bootstrap Job.
+    {
+      name   = "observability/clickstack-install.yaml";
+      source = "${clickstackRendered}/install.yaml";
+    }
+    # Audit copy of the values used at render time.
+    {
+      name    = "observability/clickstack-values.yaml";
+      content = clickstackValues;
+    }
+
+    # ─── HyperDX connections.json / sources.json Secret (placeholder) ─
+    # The bootstrap-secrets script overwrites this with a connections
+    # JSON that includes the real `hyperdx` CH password. Until then,
+    # HyperDX comes up with an empty connection set and the UI reports
+    # "no sources configured" — functional but inert.
+    {
+      name    = "observability/secret-clickstack-hyperdx-config.yaml";
+      content = ''
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: clickstack-hyperdx-config
+          namespace: ${o.namespace}
+          annotations:
+            argocd.argoproj.io/sync-wave: "3"
+            argocd.argoproj.io/compare-options: IgnoreExtraneous
+          labels:
+            app.kubernetes.io/name: clickstack-hyperdx-config
+            app.kubernetes.io/part-of: observability
+        type: Opaque
+        stringData:
+          connections.json: "[]"
+          sources.json: "[]"
+      '';
+    }
+
+    # ─── Certificate (sync-wave 2) ───────────────────────────────────
+    # Mirrors rendered/nginx/certificate.yaml — self-signed ClusterIssuer
+    # from cert-manager, ECDSA P-256, 90-day cert with 30-day renewal.
+    {
+      name    = "observability/certificate.yaml";
+      content = ''
+        apiVersion: cert-manager.io/v1
+        kind: Certificate
+        metadata:
+          name: clickstack-tls
+          namespace: ${o.namespace}
+          annotations:
+            argocd.argoproj.io/sync-wave: "2"
+        spec:
+          secretName: clickstack-tls
+          duration: 2160h
+          renewBefore: 720h
+          privateKey:
+            algorithm: ECDSA
+            size: 256
+          dnsNames:
+          - ${o.clickstack.host}
+          issuerRef:
+            name: selfsigned-lab
+            kind: ClusterIssuer
+            group: cert-manager.io
+      '';
+    }
+
+    # ─── Cilium Ingress (sync-wave 5) ────────────────────────────────
+    # Mirrors rendered/nginx/ingress.yaml shape. VIP 10.33.33.50 is
+    # advertised by the Cilium LB-IP pool; the host header
+    # `clickstack.lab.local` routes to the HyperDX app Service.
+    {
+      name    = "observability/ingress.yaml";
+      content = ''
+        apiVersion: networking.k8s.io/v1
+        kind: Ingress
+        metadata:
+          name: clickstack
+          namespace: ${o.namespace}
+          annotations:
+            cert-manager.io/cluster-issuer: selfsigned-lab
+            argocd.argoproj.io/sync-wave: "5"
+        spec:
+          ingressClassName: ${o.clickstack.ingressClassName}
+          tls:
+          - hosts:
+            - ${o.clickstack.host}
+            secretName: clickstack-tls
+          rules:
+          - host: ${o.clickstack.host}
+            http:
+              paths:
+              - path: /
+                pathType: Prefix
+                backend:
+                  service:
+                    name: clickstack-app
+                    port: { number: 3000 }
+      '';
+    }
+
     # ─── ArgoCD Application ──────────────────────────────────────────
     {
       name = "observability/application.yaml";
@@ -842,7 +1004,7 @@ in
             path: ${constants.gitops.renderedPath}/observability
             directory:
               recurse: false
-              exclude: '{application.yaml,collector-values.yaml}'
+              exclude: '{application.yaml,collector-values.yaml,clickstack-values.yaml}'
           destination:
             server: https://kubernetes.default.svc
             namespace: ${o.namespace}
@@ -855,12 +1017,17 @@ in
               - CreateNamespace=true
               - RespectIgnoreDifferences=true
           ignoreDifferences:
-            # PR 4's bootstrap-secrets script overwrites this Secret's
+            # Bootstrap-secrets script overwrites these Secrets'
             # data out-of-band. Prevent ArgoCD from reverting real
-            # creds back to the placeholder on every self-heal.
+            # creds back to the placeholders on every self-heal.
             - group: ""
               kind: Secret
               name: otel-ch-credentials
+              namespace: ${o.namespace}
+              jsonPointers: ["/data", "/stringData"]
+            - group: ""
+              kind: Secret
+              name: clickstack-hyperdx-config
               namespace: ${o.namespace}
               jsonPointers: ["/data", "/stringData"]
       '';

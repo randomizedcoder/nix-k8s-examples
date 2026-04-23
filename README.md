@@ -186,7 +186,7 @@ Self-hosted Matrix homeserver (Synapse) + Element Web client + matrix-hookshot (
 
 ```bash
 # 1. /etc/hosts on the dev host:
-#    10.33.33.50 matrix.lab.local element.lab.local hookshot.lab.local maubot.lab.local hello.lab.local
+#    10.33.33.50 matrix.lab.local element.lab.local hookshot.lab.local maubot.lab.local hello.lab.local clickstack.lab.local
 
 # 2. Generate secrets (tokens, bcrypt'd maubot admin password) once per cluster:
 nix run .#k8s-matrix-bootstrap-secrets
@@ -262,6 +262,28 @@ curl -sk --resolve hello.lab.local:443:10.33.33.50 \
 ```
 
 Rotate the Anubis signing key: `nix run .#k8s-anubis-bootstrap-secrets -- --force` (then rollout-restart the Deployment). Tune the policy by editing `botPolicies.yaml` in `nix/gitops/env/nginx.nix` and re-rendering.
+
+### Observability (ClickStack UI → ch4)
+
+| Service | URL | Notes |
+|---------|-----|-------|
+| ClickStack UI (HyperDX) | `https://clickstack.lab.local/` | Cilium Ingress + `selfsigned-lab` cert. Backed by the ch4 ClickHouse cluster (`otel` database) and an emptyDir MongoDB. |
+| OTel Collector `/metrics` | `http://<node-ip>:8888/metrics` | Each collector pod's self-telemetry (DS on all 4 CH nodes). |
+| Schema-bootstrap Job | `observability/otel-schema-bootstrap` | ArgoCD sync-wave 1 hook; applies the canonical OTel v0.118 DDL on every sync. |
+
+Unified logs + traces + metrics pipeline: each node runs an OTel Collector DaemonSet that accepts OTLP over a UDS at `/var/run/otel/collector.sock` (zero-NIC ingress from co-located workloads), enriches with k8s attributes, and writes to a co-located ClickHouse replica over loopback TCP (`127.0.0.1:9000`). Prometheus on cp0 mirrors every scrape target into the collector via `prometheusremotewrite`. See [docs/observability.md](docs/observability.md) for the full design.
+
+```bash
+# 1. /etc/hosts on the dev host:
+#    10.33.33.50 clickstack.lab.local
+
+# 2. Provision CH users (otel writer, hyperdx reader) + populate Secrets:
+nix run .#k8s-observability-bootstrap-secrets
+
+# 3. Browse to https://clickstack.lab.local (accept the self-signed cert).
+```
+
+Phase-1 scope: MongoDB runs on emptyDir (UI state resets on pod restart); Hubble flow ingest and the read-only browse-only OIDC hook land in follow-up PRs — see docs/observability.md § "Phase-2".
 
 ### Chaos / Failover Test
 

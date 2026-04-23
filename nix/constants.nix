@@ -252,10 +252,16 @@ rec {
     clickstack = {
       host             = "clickstack.lab.local";
       ingressClassName = "cilium";
-      mongoStorageGi   = 1;      # emptyDir in Phase-1; size used by Phase-2 PVC
+      # The ClickStack chart is all-in-one: it ships HyperDX + MongoDB
+      # + ClickHouse + OTel Collector. We disable the CH + Collector
+      # subcharts (our ch4 cluster and DS from PR 2 own those) but
+      # keep the chart's MongoDB Deployment with emptyDir in Phase-1.
+      # mongoStorageGi is unused in Phase-1 — emptyDir wins — but
+      # stays pinned for the Phase-2 PVC sizing decision.
+      mongoStorageGi   = 1;
     };
 
-    # Populated in PR 2 (collector) and PR 4 (hyperdx).
+    # Populated in PR 2 (collector) and PR 4 (clickstack).
     helmCharts = {
       # opentelemetry-collector 0.115.0 ships appVersion 0.118.0 — the
       # contrib image tag we actually run. Keep clickhouseExporterVersion
@@ -266,7 +272,14 @@ rec {
         url     = "https://github.com/open-telemetry/opentelemetry-helm-charts/releases/download/opentelemetry-collector-0.115.0/opentelemetry-collector-0.115.0.tgz";
         hash    = "sha256-zOv5DLMHJnYV9bg0teT4onmJ4xBKlLl7p4FLYNIJdMQ=";
       };
-      # hyperdx = { version = "..."; url = "..."; hash = "..."; };  # PR 4
+      # hyperdxio/helm-charts clickstack-1.1.1 → ships HyperDX UI +
+      # MongoDB + (disabled) ClickHouse + (disabled) OTel Collector.
+      # appVersion 2.8.0 is the HyperDX image tag that ships with it.
+      clickstack = {
+        version = "1.1.1";
+        url     = "https://github.com/hyperdxio/helm-charts/releases/download/clickstack-1.1.1/clickstack-1.1.1.tgz";
+        hash    = "sha256-Yf0SnyGSJbSqKwwDYl05jL4KQXP5qC+h2XactKhYudM=";
+      };
     };
 
     # Pinned version of opentelemetry-collector-contrib whose canonical

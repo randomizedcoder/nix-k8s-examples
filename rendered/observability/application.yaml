@@ -11,7 +11,7 @@ spec:
     path: rendered/observability
     directory:
       recurse: false
-      exclude: '{application.yaml,collector-values.yaml}'
+      exclude: '{application.yaml,collector-values.yaml,clickstack-values.yaml}'
   destination:
     server: https://kubernetes.default.svc
     namespace: observability
@@ -24,12 +24,17 @@ spec:
       - CreateNamespace=true
       - RespectIgnoreDifferences=true
   ignoreDifferences:
-    # PR 4's bootstrap-secrets script overwrites this Secret's
+    # Bootstrap-secrets script overwrites these Secrets'
     # data out-of-band. Prevent ArgoCD from reverting real
-    # creds back to the placeholder on every self-heal.
+    # creds back to the placeholders on every self-heal.
     - group: ""
       kind: Secret
       name: otel-ch-credentials
+      namespace: observability
+      jsonPointers: ["/data", "/stringData"]
+    - group: ""
+      kind: Secret
+      name: clickstack-hyperdx-config
       namespace: observability
       jsonPointers: ["/data", "/stringData"]
 
