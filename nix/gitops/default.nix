@@ -28,6 +28,7 @@ let
   certManager  = import (envDir + "/cert-manager.nix")  { inherit pkgs lib; };
   matrix       = import (envDir + "/matrix.nix")        { inherit pkgs lib; };
   observability = import (envDir + "/observability.nix") { inherit pkgs lib helm; };
+  registry     = import (envDir + "/registry.nix")      { inherit pkgs lib; };
 
   # Combine all manifests
   allManifests = base.manifests ++ argocd.manifests ++ cilium.manifests
@@ -37,7 +38,8 @@ let
     ++ postgres.manifests
     ++ certManager.manifests
     ++ matrix.manifests
-    ++ observability.manifests;
+    ++ observability.manifests
+    ++ registry.manifests;
 
   emitStep = m:
     if m ? source then ''

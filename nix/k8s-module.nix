@@ -124,8 +124,14 @@ in
       enable = true;
       settings = {
         version = lib.mkForce 3;
-        plugins."io.containerd.cri.v1.images".pinned_images = {
-          sandbox = "registry.k8s.io/pause:3.10";
+        plugins."io.containerd.cri.v1.images" = {
+          pinned_images = {
+            sandbox = "registry.k8s.io/pause:3.10";
+          };
+          # Per-registry trust config lives under /etc/containerd/certs.d/<host>/hosts.toml.
+          # Lets us trust the cluster CA for the in-cluster Zot
+          # registry without editing containerd's main config.
+          registry.config_path = "/etc/containerd/certs.d";
         };
         plugins."io.containerd.cri.v1.runtime" = {
           containerd.runtimes.runc = {
@@ -137,6 +143,27 @@ in
         };
       };
     };
+
+    # ─── containerd trust for in-cluster Zot registry ────────────────
+    # The Zot LoadBalancer Service terminates TLS with a cluster-CA-
+    # signed leaf (see nix/certs.nix). Pointing containerd at the
+    # cluster CA here means pulls from registry.lab.local validate
+    # without any per-cert plumbing (the CA has 10-year validity).
+    environment.etc."containerd/certs.d/${constants.registry.host}/hosts.toml".text = ''
+      server = "https://${constants.registry.host}"
+
+      [host."https://${constants.registry.host}"]
+        capabilities = ["pull", "resolve"]
+        ca = "${pki}/ca.crt"
+    '';
+
+    # ─── /etc/hosts: in-cluster registry ─────────────────────────────
+    # Every node resolves registry.lab.local to the Zot LB VIP so
+    # containerd (and skopeo/crictl invoked on the host) reach the
+    # registry via the same hostname the TLS cert authorises.
+    networking.extraHosts = ''
+      ${constants.registry.vip} ${constants.registry.host}
+    '';
 
     # CNI plugins
     environment.systemPackages = with pkgs; [

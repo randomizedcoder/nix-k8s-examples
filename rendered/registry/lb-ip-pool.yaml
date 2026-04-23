@@ -1,0 +1,12 @@
+apiVersion: cilium.io/v2
+kind: CiliumLoadBalancerIPPool
+metadata:
+  name: registry-lb-pool
+spec:
+  serviceSelector:
+    matchLabels:
+      app: zot
+  blocks:
+  - start: "10.33.33.51"
+    stop:  "10.33.33.51"
+

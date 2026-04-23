@@ -230,6 +230,20 @@
             };
           })
 
+          # In-cluster OCI registry (Zot) operator helpers
+          // (let
+            registryScripts = import (nixDir + "/registry-scripts.nix") { inherit pkgs; };
+          in {
+            k8s-registry-bootstrap-secrets = {
+              type = "app";
+              program = "${registryScripts.bootstrapSecrets}/bin/k8s-registry-bootstrap-secrets";
+            };
+            k8s-registry-push = {
+              type = "app";
+              program = "${registryScripts.push}/bin/k8s-registry-push";
+            };
+          })
+
           # Lifecycle test apps
           // (lifecycle.apps or {})
         );

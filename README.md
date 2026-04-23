@@ -285,6 +285,32 @@ nix run .#k8s-observability-bootstrap-secrets
 
 Phase-1 scope: MongoDB runs on emptyDir (UI state resets on pod restart); Hubble flow ingest and the read-only browse-only OIDC hook land in follow-up PRs — see docs/observability.md § "Phase-2".
 
+### In-cluster OCI registry (Zot)
+
+| Service | URL | Notes |
+|---------|-----|-------|
+| Zot registry | `https://registry.lab.local/` | Dedicated LB VIP `10.33.33.51` (separate from cilium-ingress `.50`). TLS leaf is cluster-CA-signed; every node trusts the cluster CA via `/etc/containerd/certs.d/registry.lab.local/hosts.toml`. Anonymous pull, htpasswd-gated push. |
+
+Used by images Nix builds locally — starting with hubble-otel from the archived `cilium/hubble-otel` tree (see PR 5b). Containerd on every node resolves `registry.lab.local` via `networking.extraHosts` and validates the leaf against the cluster CA, so pulls "just work" without any per-cert rotation plumbing.
+
+```bash
+# 1. /etc/hosts on the dev host:
+#    10.33.33.51 registry.lab.local
+
+# 2. Generate htpasswd for the push user + populate the TLS Secret from
+#    cp0's node PKI dir. Prints the push password once.
+nix run .#k8s-registry-bootstrap-secrets
+
+# 3. Push a Nix-built image (docker-archive tarball) into the registry:
+nix build .#some-image              # produces ./result
+nix run .#k8s-registry-push -- ./result myrepo:v1
+
+# 4. Pull from any node:
+crictl pull registry.lab.local/myrepo:v1
+```
+
+Rotate push creds + TLS: `nix run .#k8s-registry-bootstrap-secrets -- --force`. The TLS leaf itself rotates with the rest of the cluster PKI (30-day validity, regenerated on VM rebuild).
+
 ### Chaos / Failover Test
 
 `nix run .#k8s-chaos-failover` runs a continuous light transactional workload against all four databases (PostgreSQL, TiDB, ClickHouse, FoundationDB), then stops and restarts one MicroVM at a time in a loop, measuring per-DB recovery time after each kill.

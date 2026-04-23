@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: zot
+  namespace: registry
+  labels:
+    app: zot
+spec:
+  type: LoadBalancer
+  loadBalancerIP: 10.33.33.51
+  selector:
+    app: zot
+  ports:
+  - name: https
+    port: 443
+    targetPort: 5000
+    protocol: TCP
+

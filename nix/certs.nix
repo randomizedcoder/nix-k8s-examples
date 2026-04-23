@@ -27,6 +27,16 @@ let
 
   etcdSans = [ "localhost" "127.0.0.1" "::1" ] ++ allIps4 ++ allIps6;
 
+  # SANs for the in-cluster OCI registry leaf cert. The Service VIP
+  # is what clients actually hit (via /etc/hosts → registry.lab.local);
+  # node IPs are included as fallback so a direct-to-node pull still
+  # validates if someone bypasses the VIP during debugging.
+  registrySans = [
+    constants.registry.host
+    constants.registry.vip
+    "localhost" "127.0.0.1" "::1"
+  ] ++ allIps4 ++ allIps6;
+
   # ─── Build-time PKI derivation ──────────────────────────────────────
   # Generates ALL certs as a Nix store path. Deterministic (fixed seed not
   # needed — certs are regenerated on any input change via content hash).
@@ -75,6 +85,15 @@ let
       $out/front-proxy-client.crt $out/front-proxy-client.key \
       --profile leaf --ca $out/front-proxy-ca.crt --ca-key $out/front-proxy-ca.key \
       --no-password --insecure --not-after=${leafNotAfter} --san "front-proxy-client"
+
+    # In-cluster OCI registry (Zot) TLS leaf. Signed by the cluster
+    # CA so containerd's hosts.toml can trust CA=ca.crt for pulls
+    # from registry.lab.local without any per-cert rotation.
+    step certificate create "${constants.registry.host}" \
+      $out/registry-tls.crt $out/registry-tls.key \
+      --profile leaf --ca $out/ca.crt --ca-key $out/ca.key \
+      --no-password --insecure --not-after=${leafNotAfter} \
+      ${mkSans registrySans}
 
     # Per-node etcd + kubelet certs
     ${builtins.concatStringsSep "\n" (builtins.map (n: let
@@ -211,6 +230,12 @@ let
       cp ${pkiStore}/sa.pub ${pkiStore}/sa.key $out/
       cp ${pkiStore}/kubelet-${nodeName}.crt $out/kubelet.crt
       cp ${pkiStore}/kubelet-${nodeName}.key $out/kubelet.key
+
+      # In-cluster OCI registry TLS — lives on every node so the
+      # Zot pod can mount it via hostPath regardless of which node
+      # the scheduler picks. Kept mode 0600 by default in /nix/store.
+      cp ${pkiStore}/registry-tls.crt $out/registry-tls.crt
+      cp ${pkiStore}/registry-tls.key $out/registry-tls.key
 
       # Kubeconfigs
       cp ${kubeletKubeconfig} $out/kubelet-kubeconfig
