@@ -1117,6 +1117,16 @@ in
                   readOnlyRootFilesystem: true
                   capabilities:
                     drop: ["ALL"]
+                # The dockerTools-built image is scratch + binary, no
+                # /tmp directory. hubble-otel writes a span database
+                # there at startup; mount an emptyDir so we keep
+                # readOnlyRootFilesystem.
+                volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+              volumes:
+              - name: tmp
+                emptyDir: {}
       '';
     }
 
