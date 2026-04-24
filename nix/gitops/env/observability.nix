@@ -511,6 +511,19 @@ let
         cpu: 100m
         memory: 256Mi
 
+    # Override the chart's full name so the rendered DaemonSet,
+    # ConfigMap, and Service are named `otel-collector` instead of
+    # `otel-collector-opentelemetry-collector`. hubble-otel and any
+    # other clients dial otel-collector.observability.svc by name.
+    fullnameOverride: otel-collector
+
+    # In daemonset mode the chart's serviceEnabled helper defaults to
+    # false unless we set this flag explicitly. We need the ClusterIP
+    # Service so hubble-otel can reach the otlp/cluster receiver via
+    # otel-collector.observability.svc.cluster.local:4317.
+    service:
+      enabled: true
+
     # Port map — fully overriding the chart defaults. We disable
     # jaeger-* and zipkin (unused, and `zipkin` collides with `promrw`
     # on 9411); keep OTLP gRPC/HTTP for the loopback/in-cluster path;

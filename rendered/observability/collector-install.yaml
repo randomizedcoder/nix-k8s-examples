@@ -3,7 +3,7 @@
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: otel-collector-opentelemetry-collector
+  name: otel-collector
   namespace: observability
   labels:
     helm.sh/chart: opentelemetry-collector-0.140.0
@@ -18,7 +18,7 @@ metadata:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: otel-collector-opentelemetry-collector-agent
+  name: otel-collector-agent
   namespace: observability
   labels:
     helm.sh/chart: opentelemetry-collector-0.140.0
@@ -99,7 +99,7 @@ data:
     receivers:
       filelog:
         exclude:
-        - /var/log/pods/observability_otel-collector-opentelemetry-collector*_*/opentelemetry-collector/*.log
+        - /var/log/pods/observability_otel-collector*_*/opentelemetry-collector/*.log
         include:
         - /var/log/pods/*/*/*.log
         include_file_name: false
@@ -243,7 +243,7 @@ data:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: otel-collector-opentelemetry-collector
+  name: otel-collector
   labels:
     helm.sh/chart: opentelemetry-collector-0.140.0
     app.kubernetes.io/name: opentelemetry-collector
@@ -270,7 +270,7 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: otel-collector-opentelemetry-collector
+  name: otel-collector
   labels:
     helm.sh/chart: opentelemetry-collector-0.140.0
     app.kubernetes.io/name: opentelemetry-collector
@@ -282,17 +282,59 @@ metadata:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: otel-collector-opentelemetry-collector
+  name: otel-collector
 subjects:
 - kind: ServiceAccount
-  name: otel-collector-opentelemetry-collector
+  name: otel-collector
   namespace: observability
+---
+# Source: opentelemetry-collector/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+  namespace: observability
+  labels:
+    helm.sh/chart: opentelemetry-collector-0.140.0
+    app.kubernetes.io/name: opentelemetry-collector
+    app.kubernetes.io/instance: otel-collector
+    app.kubernetes.io/version: "0.140.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: opentelemetry-collector
+    app.kubernetes.io/component: agent-collector
+    component: agent-collector
+spec:
+  type: ClusterIP
+  ports:
+    
+    - name: metrics
+      port: 8888
+      targetPort: 8888
+      protocol: TCP
+    - name: otlp
+      port: 4317
+      targetPort: 4317
+      protocol: TCP
+      appProtocol: grpc
+    - name: otlp-http
+      port: 4318
+      targetPort: 4318
+      protocol: TCP
+    - name: promrw
+      port: 9411
+      targetPort: 9411
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: opentelemetry-collector
+    app.kubernetes.io/instance: otel-collector
+    component: agent-collector
+  internalTrafficPolicy: Local
 ---
 # Source: opentelemetry-collector/templates/daemonset.yaml
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: otel-collector-opentelemetry-collector-agent
+  name: otel-collector-agent
   namespace: observability
   labels:
     helm.sh/chart: opentelemetry-collector-0.140.0
@@ -314,7 +356,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/config: 9ddd303379720fe1c90e9f9bbed40920b580fb82ca4f275963d4169337079704
+        checksum/config: af44469b56a6a9392507e14d293ee29b355adf3c7480b3e6c1f5d3fedd03fecb
         
       labels:
         app.kubernetes.io/name: opentelemetry-collector
@@ -323,7 +365,7 @@ spec:
         
     spec:
       
-      serviceAccountName: otel-collector-opentelemetry-collector
+      serviceAccountName: otel-collector
       automountServiceAccountToken: true
       securityContext:
         {}
@@ -407,7 +449,7 @@ spec:
       volumes:
         - name: opentelemetry-collector-configmap
           configMap:
-            name: otel-collector-opentelemetry-collector-agent
+            name: otel-collector-agent
             items:
               - key: relay
                 path: relay.yaml
