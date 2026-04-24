@@ -440,8 +440,13 @@ let
         enabled: true
       kubernetesAttributes:
         enabled: true
+      # kubernetesEvents preset is a no-op in daemonset mode (chart's
+      # daemonsetConfig template skips applyKubernetesEventsConfig). The
+      # k8sobjects receiver must be a singleton so events aren't
+      # duplicated N× across nodes; running it here would require a
+      # separate 1-replica Deployment. Deferred to a follow-up PR.
       kubernetesEvents:
-        enabled: true
+        enabled: false
 
     # Pin to the 4 CH nodes so every collector pod sits next to a CH
     # replica on the same host (writes go via 127.0.0.1:9000).
@@ -641,7 +646,9 @@ let
             address: 0.0.0.0:${toString o.collector.metricsPort}
         pipelines:
           logs:
-            receivers: [otlp, otlp/cluster, filelog, k8sobjects]
+            # k8sobjects (k8s events) omitted: requires singleton
+            # deployment, not a DS. See kubernetesEvents preset comment.
+            receivers: [otlp, otlp/cluster, filelog]
             processors: [memory_limiter, k8sattributes, batch]
             exporters: [clickhouse]
           traces:

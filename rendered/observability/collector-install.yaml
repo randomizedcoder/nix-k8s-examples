@@ -206,7 +206,6 @@ data:
           - otlp
           - otlp/cluster
           - filelog
-          - k8sobjects
         metrics:
           exporters:
           - clickhouse
@@ -265,9 +264,6 @@ rules:
   - apiGroups: [""]
     resources: ["nodes/stats"]
     verbs: ["get", "watch", "list"]
-  - apiGroups: ["events.k8s.io"]
-    resources: ["events"]
-    verbs: ["watch", "list"]
 ---
 # Source: opentelemetry-collector/templates/clusterrolebinding.yaml
 apiVersion: rbac.authorization.k8s.io/v1
@@ -317,7 +313,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/config: 1bda8184973001adf4384495409728661f2e8b1c0a80d83f9813009ad6d60e9a
+        checksum/config: 7e36d0d7dbc83f5dd701725f412308b35dfd9168de063b351553ea7f0921bf28
         
       labels:
         app.kubernetes.io/name: opentelemetry-collector
