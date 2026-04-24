@@ -493,6 +493,16 @@ let
     - name: otel-uds
       mountPath: ${o.udsHostPath}
 
+    # The contrib image's default user (10001) cannot bind a UDS in
+    # /var/run/otel (DirectoryOrCreate hostPath, owned by root) or read
+    # /var/log/pods. Run as root so filelog and the OTLP UDS receiver
+    # can both come up. Matches the security posture of the cilium DS,
+    # which is the only other DS in the cluster.
+    securityContext:
+      runAsUser: 0
+      runAsGroup: 0
+      runAsNonRoot: false
+
     resources:
       limits:
         cpu: 1000m
