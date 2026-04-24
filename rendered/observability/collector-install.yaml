@@ -206,7 +206,7 @@ data:
           - otlp
           - otlp/cluster
           - filelog
-          - k8s_events
+          - k8sobjects
         metrics:
           exporters:
           - clickhouse
@@ -317,7 +317,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/config: 1bc6684b594e11917376ea39cf95b2daae4d947790f3247504f6eab60133b70e
+        checksum/config: 1bda8184973001adf4384495409728661f2e8b1c0a80d83f9813009ad6d60e9a
         
       labels:
         app.kubernetes.io/name: opentelemetry-collector

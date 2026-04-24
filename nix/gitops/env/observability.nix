@@ -641,7 +641,7 @@ let
             address: 0.0.0.0:${toString o.collector.metricsPort}
         pipelines:
           logs:
-            receivers: [otlp, otlp/cluster, filelog, k8s_events]
+            receivers: [otlp, otlp/cluster, filelog, k8sobjects]
             processors: [memory_limiter, k8sattributes, batch]
             exporters: [clickhouse]
           traces:
