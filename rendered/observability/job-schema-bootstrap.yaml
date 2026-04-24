@@ -35,7 +35,7 @@ spec:
               echo "waiting for ClickHouse..."
               sleep 2
             done
-            echo "applying schema (v0.118.0)..."
+            echo "applying schema (v0.140.0)..."
             clickhouse-client \
                 --host clickhouse.clickhouse.svc.cluster.local \
                 --multiquery \

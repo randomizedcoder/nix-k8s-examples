@@ -8,7 +8,7 @@ metadata:
   labels:
     app.kubernetes.io/name: otel-schema-bootstrap
     app.kubernetes.io/part-of: observability
-    observability.nix-k8s-examples/exporter-version: "v0.118.0"
+    observability.nix-k8s-examples/exporter-version: "v0.140.0"
 data:
   bootstrap.sql: |
     -- ─── Database ─────────────────────────────────────────────────

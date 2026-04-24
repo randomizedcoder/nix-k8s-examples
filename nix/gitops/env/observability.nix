@@ -413,7 +413,7 @@ let
   # land exactly as the design doc specifies. Only the 4 CH nodes are
   # valid placement (nodeAffinity), so each collector pod is next to
   # a CH replica — writes go via 127.0.0.1:9000.
-  collectorImageTag = "0.118.0";  # must match clickhouseExporterVersion (sans "v")
+  collectorImageTag = "0.140.0";  # must match clickhouseExporterVersion (sans "v")
   collectorValues = ''
     mode: daemonset
 

@@ -263,14 +263,18 @@ rec {
 
     # Populated in PR 2 (collector) and PR 4 (clickstack).
     helmCharts = {
-      # opentelemetry-collector 0.115.0 ships appVersion 0.118.0 — the
-      # contrib image tag we actually run. Keep clickhouseExporterVersion
-      # below in lockstep with appVersion so the inlined DDL matches the
-      # INSERT statements the exporter emits.
+      # opentelemetry-collector 0.140.0 ships appVersion 0.140.0 — the
+      # contrib image tag we actually run. Bumped from 0.115.0/0.118.0
+      # to pick up `prometheusremotewritereceiver` in the otelcol-contrib
+      # distribution (added between v0.125.0 and v0.140.0). Required by
+      # the Prom remoteWrite bridge from monitoring-module.nix.
+      # Keep clickhouseExporterVersion below in lockstep with appVersion
+      # so the inlined DDL matches the INSERT column lists the collector
+      # emits (logs INSERT columns verified identical v0.118.0→v0.140.0).
       opentelemetryCollector = {
-        version = "0.115.0";
-        url     = "https://github.com/open-telemetry/opentelemetry-helm-charts/releases/download/opentelemetry-collector-0.115.0/opentelemetry-collector-0.115.0.tgz";
-        hash    = "sha256-zOv5DLMHJnYV9bg0teT4onmJ4xBKlLl7p4FLYNIJdMQ=";
+        version = "0.140.0";
+        url     = "https://github.com/open-telemetry/opentelemetry-helm-charts/releases/download/opentelemetry-collector-0.140.0/opentelemetry-collector-0.140.0.tgz";
+        hash    = "sha256-PgMTJdihvOn39BSjJTNnVhLy3/vz4PMI+hy4vDKGV2Y=";
       };
       # hyperdxio/helm-charts clickstack-1.1.1 → ships HyperDX UI +
       # MongoDB + (disabled) ClickHouse + (disabled) OTel Collector.
@@ -287,7 +291,7 @@ rec {
     # ConfigMap. Keep this in lockstep with the chart's appVersion so
     # the schema we create matches the INSERT column lists the
     # collector emits.
-    clickhouseExporterVersion = "v0.118.0";
+    clickhouseExporterVersion = "v0.140.0";
 
     # hubble-otel image we push into the in-cluster Zot registry.
     # Upstream (cilium/hubble-otel) is archived — we rebuild the binary
