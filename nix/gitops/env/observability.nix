@@ -632,10 +632,13 @@ let
 
       exporters:
         clickhouse:
-          # Loopback-TCP write: CH native protocol on 127.0.0.1:9000.
-          # The collector runs on the same node as a CH replica by
-          # nodeAffinity, so this never crosses the NIC.
-          endpoint: tcp://127.0.0.1:9000?dial_timeout=10s&compress=lz4
+          # CH native protocol via the headless Service (one A record per
+          # replica pod). The original design called for `127.0.0.1:9000`
+          # for loopback writes, but that requires CH to run with
+          # hostNetwork or hostPort and it does not — pods have private
+          # network namespaces. The local-node optimization can be
+          # restored later with NodePort + internalTrafficPolicy=Local.
+          endpoint: tcp://clickhouse-headless.clickhouse.svc.cluster.local:9000?dial_timeout=10s&compress=lz4
           database: ${ch.database}
           username: "''${env:CLICKHOUSE_USER}"
           password: "''${env:CLICKHOUSE_PASSWORD}"

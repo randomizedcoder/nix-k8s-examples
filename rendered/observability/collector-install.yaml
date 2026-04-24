@@ -34,7 +34,7 @@ data:
       clickhouse:
         create_schema: false
         database: otel
-        endpoint: tcp://127.0.0.1:9000?dial_timeout=10s&compress=lz4
+        endpoint: tcp://clickhouse-headless.clickhouse.svc.cluster.local:9000?dial_timeout=10s&compress=lz4
         logs_table_name: otel_logs_dist
         metrics_tables:
           exponential_histogram:
@@ -356,7 +356,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/config: af44469b56a6a9392507e14d293ee29b355adf3c7480b3e6c1f5d3fedd03fecb
+        checksum/config: ab28c83eeed7a1d7f71c9454505c52b49618a47ca31f7b5a459c1a9065959a74
         
       labels:
         app.kubernetes.io/name: opentelemetry-collector
