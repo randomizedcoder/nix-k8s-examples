@@ -172,7 +172,8 @@ data:
       otlp:
         protocols:
           grpc:
-            endpoint: unix:///var/run/otel/collector.sock
+            endpoint: /var/run/otel/collector.sock
+            transport: unix
           http:
             endpoint: 0.0.0.0:4318
       otlp/cluster:
@@ -313,7 +314,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/config: 7e36d0d7dbc83f5dd701725f412308b35dfd9168de063b351553ea7f0921bf28
+        checksum/config: 9ddd303379720fe1c90e9f9bbed40920b580fb82ca4f275963d4169337079704
         
       labels:
         app.kubernetes.io/name: opentelemetry-collector

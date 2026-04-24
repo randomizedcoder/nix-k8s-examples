@@ -547,7 +547,11 @@ let
         otlp:
           protocols:
             grpc:
-              endpoint: unix://${o.udsHostPath}/collector.sock
+              # OTel Collector v0.140 requires explicit `transport: unix`
+              # for UDS; the `unix://` URI scheme alone trips a tcp
+              # listener and `lookup tcp///: unknown port`.
+              endpoint: ${o.udsHostPath}/collector.sock
+              transport: unix
             http:
               endpoint: 0.0.0.0:4318
 

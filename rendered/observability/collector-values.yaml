@@ -130,7 +130,11 @@ config:
     otlp:
       protocols:
         grpc:
-          endpoint: unix:///var/run/otel/collector.sock
+          # OTel Collector v0.140 requires explicit `transport: unix`
+          # for UDS; the `unix://` URI scheme alone trips a tcp
+          # listener and `lookup tcp///: unknown port`.
+          endpoint: /var/run/otel/collector.sock
+          transport: unix
         http:
           endpoint: 0.0.0.0:4318
 
