@@ -1238,9 +1238,10 @@ in
                 tls:
                   insecure: true
             service:
-              telemetry:
-                metrics:
-                  address: 0.0.0.0:8888
+              # No telemetry block — v0.140 replaced
+              # `service.telemetry.metrics.address` with the
+              # `readers` schema, and this singleton has no Prometheus
+              # scrape target wired up anyway.
               pipelines:
                 logs:
                   receivers: [k8sobjects]
