@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-events
+  namespace: observability
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  replicas: 1
+  # RollingUpdate would briefly overlap two pods watching the
+  # same event stream → duplicate event rows in CH. Recreate
+  # is fine for a tiny pod that only re-watches on restart.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: otel-events
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: otel-events
+    spec:
+      serviceAccountName: otel-events
+      containers:
+      - name: otelcol
+        image: otel/opentelemetry-collector-contrib:0.140.0
+        imagePullPolicy: IfNotPresent
+        args: ["--config=/conf/config.yaml"]
+        resources:
+          requests:
+            cpu: 20m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+        volumeMounts:
+        - name: config
+          mountPath: /conf
+          readOnly: true
+      volumes:
+      - name: config
+        configMap:
+          name: otel-events-config
+

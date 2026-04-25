@@ -595,6 +595,21 @@ let
         prometheusremotewrite:
           endpoint: 0.0.0.0:${toString o.collector.promRwPort}
 
+        # Override the kubeletMetrics preset's default to skip TLS
+        # verification. The kubelet generates its own self-signed
+        # serving cert with only `DNS:k8s-cpN` in the SANs, but the
+        # preset hits `''${env:K8S_NODE_IP}:10250`, which doesn't match.
+        # Result: `tls: failed to verify certificate: x509: cannot
+        # validate certificate for 10.33.33.X because it doesn't
+        # contain any IP SANs`. Skipping verify is acceptable here:
+        # this is a node-local hop (collector pod → kubelet on the
+        # same node, traffic doesn't leave the node).
+        kubeletstats:
+          collection_interval: 20s
+          auth_type: serviceAccount
+          endpoint: "''${env:K8S_NODE_IP}:10250"
+          insecure_skip_verify: true
+
       processors:
         memory_limiter:
           check_interval: 1s
@@ -632,13 +647,16 @@ let
 
       exporters:
         clickhouse:
-          # CH native protocol via the headless Service (one A record per
-          # replica pod). The original design called for `127.0.0.1:9000`
-          # for loopback writes, but that requires CH to run with
-          # hostNetwork or hostPort and it does not — pods have private
-          # network namespaces. The local-node optimization can be
-          # restored later with NodePort + internalTrafficPolicy=Local.
-          endpoint: tcp://clickhouse-headless.clickhouse.svc.cluster.local:9000?dial_timeout=10s&compress=lz4
+          # CH native protocol via the local-affinity Service. The
+          # `clickhouse-local` ClusterIP Service has
+          # internalTrafficPolicy: Local, so kube-proxy/Cilium routes
+          # this connection to the CH replica on the same node — every
+          # node has one collector pod + one CH replica by design.
+          # Effectively node-local writes without CH needing
+          # hostNetwork/hostPort. Cross-node spillover is impossible
+          # (kube-proxy returns no endpoints) — if the local CH pod is
+          # down, the export retries until it comes back.
+          endpoint: tcp://clickhouse-local.clickhouse.svc.cluster.local:9000?dial_timeout=10s&compress=lz4
           database: ${ch.database}
           username: "''${env:CLICKHOUSE_USER}"
           password: "''${env:CLICKHOUSE_PASSWORD}"
@@ -1143,6 +1161,140 @@ in
               volumes:
               - name: tmp
                 emptyDir: {}
+      '';
+    }
+
+    # ─── k8s-events singleton Deployment (sync-wave 3) ──────────────
+    # Cluster events come from a single watch on the apiserver, so we
+    # can't run k8sobjects on the DaemonSet (every pod would duplicate
+    # every event). The chart's `kubernetesEvents` preset is also a
+    # no-op in DS mode for this reason. Run a 1-replica Deployment of
+    # the same contrib image with a minimal config: k8sobjects → OTLP
+    # forward to the DS Service, which exports to ClickHouse like any
+    # other log signal. Events land in otel.otel_logs_dist with
+    # ServiceName ~= "otel-events".
+    {
+      name    = "observability/events-rbac.yaml";
+      content = ''
+        apiVersion: v1
+        kind: ServiceAccount
+        metadata:
+          name: otel-events
+          namespace: ${o.namespace}
+        ---
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRole
+        metadata:
+          name: otel-events
+        rules:
+        - apiGroups: ["events.k8s.io"]
+          resources: ["events"]
+          verbs: ["watch", "list"]
+        ---
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRoleBinding
+        metadata:
+          name: otel-events
+        roleRef:
+          apiGroup: rbac.authorization.k8s.io
+          kind: ClusterRole
+          name: otel-events
+        subjects:
+        - kind: ServiceAccount
+          name: otel-events
+          namespace: ${o.namespace}
+      '';
+    }
+
+    {
+      name    = "observability/events-configmap.yaml";
+      content = ''
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: otel-events-config
+          namespace: ${o.namespace}
+        data:
+          config.yaml: |
+            receivers:
+              k8sobjects:
+                objects:
+                - name: events
+                  mode: watch
+                  group: events.k8s.io
+                  exclude_watch_type:
+                  - DELETED
+            processors:
+              memory_limiter:
+                check_interval: 1s
+                limit_percentage: 75
+                spike_limit_percentage: 25
+              batch:
+                timeout: 5s
+                send_batch_size: 1024
+            exporters:
+              otlp:
+                endpoint: otel-collector.${o.namespace}.svc.cluster.local:${toString o.collector.otlpGrpcPort}
+                tls:
+                  insecure: true
+            service:
+              telemetry:
+                metrics:
+                  address: 0.0.0.0:8888
+              pipelines:
+                logs:
+                  receivers: [k8sobjects]
+                  processors: [memory_limiter, batch]
+                  exporters: [otlp]
+      '';
+    }
+
+    {
+      name    = "observability/events-deployment.yaml";
+      content = ''
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: otel-events
+          namespace: ${o.namespace}
+          annotations:
+            argocd.argoproj.io/sync-wave: "3"
+        spec:
+          replicas: 1
+          # RollingUpdate would briefly overlap two pods watching the
+          # same event stream → duplicate event rows in CH. Recreate
+          # is fine for a tiny pod that only re-watches on restart.
+          strategy:
+            type: Recreate
+          selector:
+            matchLabels:
+              app.kubernetes.io/name: otel-events
+          template:
+            metadata:
+              labels:
+                app.kubernetes.io/name: otel-events
+            spec:
+              serviceAccountName: otel-events
+              containers:
+              - name: otelcol
+                image: otel/opentelemetry-collector-contrib:${collectorImageTag}
+                imagePullPolicy: IfNotPresent
+                args: ["--config=/conf/config.yaml"]
+                resources:
+                  requests:
+                    cpu: 20m
+                    memory: 64Mi
+                  limits:
+                    cpu: 200m
+                    memory: 256Mi
+                volumeMounts:
+                - name: config
+                  mountPath: /conf
+                  readOnly: true
+              volumes:
+              - name: config
+                configMap:
+                  name: otel-events-config
       '';
     }
 

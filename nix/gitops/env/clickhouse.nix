@@ -310,6 +310,38 @@ in
       '';
     }
 
+    # ─── Local-affinity Service (collector → node-local CH replica) ────
+    # ClusterIP Service with internalTrafficPolicy: Local — kube-proxy /
+    # cilium will only route to a CH pod on the same node as the caller,
+    # avoiding cross-node hops for high-volume telemetry writes. The
+    # otel-collector DaemonSet is co-located with CH (every cp/worker
+    # node carries one CH replica + one collector pod), so a local pod
+    # is always available. Used by the collector's clickhouse exporter;
+    # the regular `clickhouse` Service stays cluster-wide for clients
+    # like HyperDX/clickstack-app and ad-hoc queries.
+    {
+      name = "clickhouse/service-local.yaml";
+      content = ''
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: clickhouse-local
+          namespace: ${ns}
+        spec:
+          selector:
+            app: clickhouse
+          internalTrafficPolicy: Local
+          ports:
+          - name: http
+            port: 8123
+            targetPort: 8123
+          - name: native
+            port: 9000
+            targetPort: 9000
+          type: ClusterIP
+      '';
+    }
+
     # ─── Server StatefulSet ────────────────────────────────────────────
     {
       name = "clickhouse/statefulset.yaml";
