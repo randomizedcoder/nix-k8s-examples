@@ -13,6 +13,12 @@ k8s-*-data.img
 # private keys, never commit. Rebuilt from certs.nix at VM build time.
 certs/
 
+# Pre-generated application secrets live in ./secrets/ but are NOT
+# gitignored here — Nix flakes can only read git-tracked files, so the
+# gen-secrets script uses `git add -N` to make them visible to Nix
+# without staging content. A pre-commit hook or review discipline
+# prevents accidental commits. See docs/secrets.md.
+
 # Chaos / failover test logs
 chaos-logs/
 chaos-logs-*/

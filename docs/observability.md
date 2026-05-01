@@ -3,9 +3,8 @@
 Comprehensive visibility — **logs, traces, metrics, and Cilium/Hubble network
 flows** — unified in a single queryable backend and a single UI.
 
-This document is the design for the observability subsystem. Implementation
-lands in follow-up PRs; this file is the source of truth for what those PRs
-must produce and why.
+This document describes the architecture of the observability subsystem.
+It is the source of truth for how the pipeline is structured and why.
 
 ## Why ClickStack
 
@@ -28,9 +27,9 @@ OpenTelemetry Collector). Using ClickStack here means:
 - The OTel Collector's OTLP gRPC receivers/exporters support Unix domain
   sockets (`endpoint: unix:///…`), so the ingest fan-in inside a node
   runs on UDS rather than TCP. The only TCP hop left inside a node is
-  the collector → local ClickHouse write, and that's pinned to
-  `127.0.0.1:9000` (loopback, no NIC) by co-locating the collector and
-  the CH pod on the same node (see topology section).
+  the collector → local ClickHouse write, routed via a `clickhouse-local`
+  ClusterIP Service with `internalTrafficPolicy: Local` so Cilium sends
+  the connection to the CH pod on the same node (see topology section).
 - ClickHouse itself doesn't listen on UDS (upstream issue
   [#22260](https://github.com/ClickHouse/ClickHouse/issues/22260) was
   closed *not planned*). The design accepts this and targets "UDS where
@@ -42,7 +41,7 @@ OpenTelemetry Collector). Using ClickStack here means:
 
 | Layer | Component | Purpose |
 |---|---|---|
-| Collector (per-node) | **OpenTelemetry Collector** DaemonSet — single tier | Tails pod stdout/stderr (`filelog`), collects `k8s_events`, `kubeletstats`, `hostmetrics`; also receives OTLP from apps and from the on-node `hubble-otel` sidecar **over Unix domain sockets**; receives `prometheusremotewrite` over loopback HTTP from cp0's Prometheus; `memory_limiter` + `batch` + `tail_sampling` + `transform`; exports to the **co-located** ClickHouse pod over loopback TCP native protocol (`127.0.0.1:9000`). One process per node — no separate agent/gateway split; see [§ Topology: single-tier DaemonSet with UDS ingress](#topology-single-tier-daemonset-with-uds-ingress) for why. |
+| Collector (per-node) | **OpenTelemetry Collector** DaemonSet — single tier | Tails pod stdout/stderr (`filelog`), collects `k8s_events`, `kubeletstats`, `hostmetrics`; also receives OTLP from apps and from the on-node `hubble-otel` sidecar **over Unix domain sockets**; receives `prometheusremotewrite` over loopback HTTP from cp0's Prometheus; `memory_limiter` + `batch` + `tail_sampling` + `transform`; exports to the **co-located** ClickHouse pod via the `clickhouse-local` Service (`internalTrafficPolicy: Local`, native protocol port 9000). One process per node — no separate agent/gateway split; see [§ Topology: single-tier DaemonSet with UDS ingress](#topology-single-tier-daemonset-with-uds-ingress) for why. |
 | Storage | **ClickHouse** (existing `ch4` cluster) | New database `otel`; `ReplicatedMergeTree` tables for logs, traces, metrics, hubble_flows. Distributed tables on top for fan-in. Already runs as a 4-replica StatefulSet with pod-anti-affinity → exactly one CH pod per node, which is what makes the collector's co-location strategy possible. |
 | UI | **ClickStack UI** (upstream project: HyperDX) | Unified search / dashboards for all signal types. Served at `clickstack.lab.local` via Cilium Ingress. |
 | UI state | **MongoDB** (single-replica StatefulSet, emptyDir) | ClickStack UI's own dashboard/user config. Phase-2: PVC + replica set via MCK operator. |
@@ -69,7 +68,7 @@ the four CH pods (managed by CH + Keeper, already part of the existing
  │  │ OTel Collector (DaemonSet — single tier)                     │  │
  │  │   receivers:                                                 │  │
  │  │     filelog          (local files)                           │  │
- │  │     k8s_events       (leader-elected, one DS replica)        │  │
+ │  │     k8s_events       (deferred — needs singleton Deployment) │  │
  │  │     kubeletstats     (node kubelet, loopback HTTPS)          │  │
  │  │     hostmetrics      (procfs / sysfs)                        │  │
  │  │     otlp (grpc):                                             │  │
@@ -80,11 +79,11 @@ the four CH pods (managed by CH + Keeper, already part of the existing
  │  │     prometheusremotewrite (cp0 only, loopback HTTP)          │  │
  │  │   processors: memory_limiter, k8sattributes,                 │  │
  │  │               tail_sampling, batch, transform                │  │
- │  │   exporters: clickhouse (tcp://127.0.0.1:9000)  ────────┐    │  │
+ │  │   exporters: clickhouse (clickhouse-local:9000) ─────────┐    │  │
  │  └──────────────────────────────────────────────────────────┼───┘  │
  │      ▲                ▲                ▲                   │      │
  │      │ UDS            │ UDS            │ HTTP loopback     │ TCP  │
- │      │ /var/run/otel  │ (same socket)  │ (cp0 only)        │ lo   │
+ │      │ /var/run/otel  │ (same socket)  │ (cp0 only)        │local │
  │      │ /collector.sock│                │                   │      │
  │  ┌───┴────────────┐  ┌┴──────────────┐  ┌┴────────────┐    │      │
  │  │ App pods       │  │ hubble-otel DS│  │ NixOS Prom  │    │      │
@@ -98,7 +97,7 @@ the four CH pods (managed by CH + Keeper, already part of the existing
  │  ┌─────────────────────────────────────────────────────────▼───┐  │
  │  │ ClickHouse pod (1 per node, co-located via nodeAffinity)    │  │
  │  │   listens: 0.0.0.0:9000 native, :8123 http                  │  │
- │  │   collector writes here via 127.0.0.1:9000 (lo, not NIC)    │  │
+ │  │   collector writes via clickhouse-local svc (local traffic)  │  │
  │  │   tables: otel_logs, otel_traces, otel_metrics_*,           │  │
  │  │           hubble_flows   (local ReplicatedMergeTree)        │  │
  │  │           *_dist         (Distributed wrappers)             │  │
@@ -137,9 +136,11 @@ DaemonSet per node:
    anti-affinity, so there is exactly one CH pod per node. A matching
    `nodeAffinity` (or just the fact that the collector DS runs on every
    node CH runs on) means the collector's `clickhouseexporter` always has
-   a same-node CH target at `127.0.0.1:9000`. That's loopback — `lo`
-   interface, no NIC, kernel skb shortcut. Not UDS-fast, but the best
-   available given CH's lack of a UDS listener (see
+   a same-node CH target via the `clickhouse-local` ClusterIP Service
+   (`internalTrafficPolicy: Local`). Cilium routes this to the CH pod on
+   the same node — effectively node-local writes without CH needing
+   `hostNetwork`/`hostPort`. Not UDS-fast, but the best available given
+   CH's lack of a UDS listener (see
    [ClickHouse/ClickHouse#22260](https://github.com/ClickHouse/ClickHouse/issues/22260)).
 4. **Better failure isolation.** A crashed collector affects one node's
    telemetry for one restart cycle, not every signal type cluster-wide.
@@ -160,12 +161,13 @@ data source.
    `/var/log/pods/*/*/*.log` (hostPath mount), parses CRI format, enriches
    each record with pod name / namespace / labels / node via the
    `k8sattributes` processor, and writes directly to the co-located CH
-   pod at `tcp://127.0.0.1:9000` (loopback, `lo` interface) →
+   pod via the `clickhouse-local` Service (local-traffic-policy) →
    `otel.otel_logs_dist`. **No TCP socket setup between producer and
    collector — it's a file read.**
-2. **Kubernetes events.** `k8s_events` receiver on **one** DS replica
-   (leader-elected via the collector's singleton flag) ingests the Events
-   API stream → local CH → `otel.otel_logs_dist` with `event.type=k8s`.
+2. **Kubernetes events.** *Deferred.* The `kubernetesEvents` preset is a
+   no-op in DaemonSet mode (the chart template skips it). A singleton
+   Deployment would be needed to avoid N-way duplication; tracked for a
+   follow-up PR.
 3. **Host / node metrics.** Local collector's `hostmetrics` +
    `kubeletstats` receivers (CPU, memory, disk, network, container cgroup
    stats) → local CH → `otel.otel_metrics_*`. Scrape interval 15 s,
@@ -329,10 +331,10 @@ inside the existing MicroVM budget. Host `hostPath` usage:
 
 ## Known limitations / explicit non-goals (Phase 1)
 
-- **ClickHouse has no UDS listener.** Last hop into CH is loopback TCP
-  (`127.0.0.1:9000`). Upstream issue
-  [ClickHouse/ClickHouse#22260](https://github.com/ClickHouse/ClickHouse/issues/22260)
-  tracks this; the design will adopt UDS to CH if/when it lands.
+- **ClickHouse has no UDS listener.** Last hop into CH is TCP via the
+  `clickhouse-local` Service (`internalTrafficPolicy: Local`). Upstream
+  issue [ClickHouse/ClickHouse#22260](https://github.com/ClickHouse/ClickHouse/issues/22260)
+  tracks UDS support; the design will adopt UDS to CH if/when it lands.
 - **Per-node tail sampling for traces.** Spans of a cross-node trace land
   on different nodes' collectors. Phase-1 accepts partial-view sampling;
   Phase-2 can add a `loadbalancingexporter` tier keyed on `trace_id`.
@@ -380,9 +382,9 @@ kubectl -n observability get pods
 nix run .#k8s-vm-ssh -- --node=cp0 "ls -l /var/run/otel/"
 # → srw-rw---- collector.sock  (socket, not file)
 
-# 6. Collector → CH is loopback, not NIC. On any node:
+# 6. Collector → CH connections via clickhouse-local Service. On any node:
 nix run .#k8s-vm-ssh -- --node=cp0 \
-  "ss -tn dst 127.0.0.1:9000 | head"
+  "kubectl -n observability exec ds/otel-collector -- ss -tn | grep 9000 | head"
 # → ESTAB entries from the collector pod to the local CH pod.
 
 # 7. Logs flowing. Search 'service.name:hello-world' in ClickStack UI;
