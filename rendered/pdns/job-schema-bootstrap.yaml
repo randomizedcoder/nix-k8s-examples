@@ -1,0 +1,47 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pdns-schema-bootstrap
+  namespace: pdns
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+  labels:
+    app.kubernetes.io/name: pdns-schema-bootstrap
+    app.kubernetes.io/part-of: pdns
+spec:
+  backoffLimit: 10
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pdns-schema-bootstrap
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: psql
+        image: ghcr.io/cloudnative-pg/postgresql:16.4
+        command:
+        - sh
+        - -c
+        - |
+          PGPASSWORD="$PG_PASSWORD" psql \
+            -h pg-rw.postgres.svc.cluster.local \
+            -U app \
+            -d pdns \
+            -f /sql/bootstrap.sql
+        env:
+        - name: PG_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: pdns-credentials
+              key: pg-password
+        volumeMounts:
+        - name: sql
+          mountPath: /sql
+          readOnly: true
+      volumes:
+      - name: sql
+        configMap:
+          name: pdns-schema-ddl
+

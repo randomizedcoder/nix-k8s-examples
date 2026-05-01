@@ -32,7 +32,7 @@ presets:
     enabled: false
 
 # Pin to the 4 CH nodes so every collector pod sits next to a CH
-# replica on the same host (writes go via 127.0.0.1:9000).
+# replica on the same host (writes via clickhouse-local Service).
 affinity:
   nodeAffinity:
     requiredDuringSchedulingIgnoredDuringExecution:

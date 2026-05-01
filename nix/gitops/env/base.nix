@@ -70,6 +70,11 @@ in
         kind: Namespace
         metadata:
           name: ${constants.observability.namespace}
+        ---
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: ${constants.pdns.namespace}
       '';
     }
     {
