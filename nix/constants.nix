@@ -215,15 +215,7 @@ rec {
   };
 
   # ─── Observability (ClickStack: OTel Collector + HyperDX UI) ───────
-  # Design: docs/observability.md. Implementation lands across 4 PRs:
-  #   PR 1 (this one): namespace + scaffolding constants.
-  #   PR 2: OTel Collector DS + schema-bootstrap Job.
-  #   PR 3: hubble-otel DS + Prometheus remoteWrite bridge.
-  #   PR 4: ClickStack UI + MongoDB + Ingress + bootstrap script.
-  #
-  # Helm chart pins and the clickhouseexporter DDL version are left
-  # empty here and populated by the PR that first references them,
-  # so a `nix build` on PR 1 does not fetch anything new.
+  # Architecture: docs/observability.md.
   observability = {
     namespace   = "observability";
     udsHostPath = "/var/run/otel";

@@ -30,13 +30,19 @@
 #   nix/nodes.nix              # Node definitions (cp0, cp1, cp2, w3)
 #   nix/microvm.nix            # mkK8sNode parametric VM generator
 #   nix/k8s-module.nix         # NixOS module: etcd, apiserver, kubelet, containerd
+#   nix/monitoring-module.nix  # NixOS module: Prometheus, Grafana, scrape targets
+#   nix/gitops-bootstrap-module.nix # NixOS module: first-boot oneshot
 #   nix/network-setup.nix      # Bridge + TAP + NAT + haproxy setup/teardown
 #   nix/certs.nix              # Build-time PKI: 3 CAs + per-component certs
+#   nix/secrets-gen.nix        # Offline secret generation (→ ./secrets/)
+#   nix/secrets.nix            # Build-time: reads ./secrets/, emits K8s Secret manifests
 #   nix/cert-inject.nix        # Legacy: expect-driven cert transfer via virtio
 #   nix/microvm-scripts.nix    # VM management (check, stop, ssh, start-all)
+#   nix/*-scripts.nix          # Operator helpers (chaos, matrix, anubis, observability, registry)
 #   nix/shell.nix              # Dev shell
+#   nix/images/                # OCI image builders (hubble-otel)
 #   nix/lifecycle/             # Lifecycle test framework (per-node + cluster)
-#   nix/gitops/                # Manifest generator (ArgoCD, Cilium, ClickHouse, nginx)
+#   nix/gitops/                # Manifest generator (12 components: Cilium, ArgoCD, ...)
 #
 {
   description = "HA Kubernetes cluster (3 CP + 1 worker) via NixOS MicroVMs";
@@ -73,9 +79,25 @@
         # Import cert generation (build-time PKI)
         certs = import (nixDir + "/certs.nix") { inherit pkgs lib; };
 
+        # Import secrets pre-generation (reads ./secrets/ if it exists)
+        secrets = import (nixDir + "/secrets.nix") {
+          inherit pkgs lib;
+        };
+        k8sSecrets = secrets.k8sSecrets;  # null if ./secrets/ doesn't exist
+        sshPubKey  = secrets.sshPubKey;   # null if no SSH key generated
+
+        # Secrets generation script
+        secretsGen = import (nixDir + "/secrets-gen.nix") { inherit pkgs; };
+
         # GitOps manifest generator (also consumed by the bootstrap unit)
         gitops = import (nixDir + "/gitops") { inherit pkgs lib; };
         k8sManifests = gitops.packages.k8s-manifests;
+
+        # Custom OCI images for the in-cluster Zot registry.
+        hubbleOtel = import (nixDir + "/images/hubble-otel.nix") {
+          inherit pkgs;
+          inherit (pkgs) lib;
+        };
 
         # ─── MicroVM Generator ───────────────────────────────────────────
         mkK8sNode = { nodeName, role }:
@@ -83,7 +105,8 @@
             inherit pkgs lib microvm k8sModule monitoringModule bootstrapModule nixpkgs system;
             inherit nodeName role;
             nodePki = certs.mkNodePki { inherit nodeName role; };
-            inherit k8sManifests;
+            inherit k8sManifests k8sSecrets sshPubKey;
+            hubbleOtelImage = hubbleOtel.image;
           };
 
         # Generate MicroVM packages for all nodes
@@ -116,15 +139,10 @@
           # Custom OCI images for the in-cluster Zot registry.
           # `nix build .#hubble-otel-image` produces a docker-archive
           # tarball that `k8s-registry-push` feeds to skopeo.
-          // (let
-            hubbleOtel = import (nixDir + "/images/hubble-otel.nix") {
-              inherit pkgs;
-              inherit (pkgs) lib;
-            };
-          in {
+          // {
             hubble-otel = hubbleOtel.bin;
             hubble-otel-image = hubbleOtel.image;
-          })
+          }
         );
 
         devShells.default = import (nixDir + "/shell.nix") { inherit pkgs; };
@@ -189,6 +207,12 @@
             k8s-gen-certs = {
               type = "app";
               program = "${certs.genCerts}/bin/k8s-gen-certs";
+            };
+
+            # Secrets pre-generation (offline, into ./secrets/)
+            k8s-gen-secrets = {
+              type = "app";
+              program = "${secretsGen.genSecrets}/bin/k8s-gen-secrets";
             };
           }
 

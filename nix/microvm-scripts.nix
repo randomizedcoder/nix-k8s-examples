@@ -171,11 +171,22 @@ in
           ;;
       esac
 
-      exec sshpass -p ${constants.ssh.password} ssh \
-        -o StrictHostKeyChecking=no \
-        -o UserKnownHostsFile=/dev/null \
-        -o LogLevel=ERROR \
-        "root@$HOST" "''${PASSTHROUGH_ARGS[@]}"
+      SSH_KEY="./secrets/ssh-ed25519"
+      if [ -f "$SSH_KEY" ]; then
+        exec ssh \
+          -o StrictHostKeyChecking=no \
+          -o UserKnownHostsFile=/dev/null \
+          -o IdentityFile="$SSH_KEY" \
+          -o IdentitiesOnly=yes \
+          -o LogLevel=ERROR \
+          "root@$HOST" "''${PASSTHROUGH_ARGS[@]}"
+      else
+        exec sshpass -p ${constants.ssh.password} ssh \
+          -o StrictHostKeyChecking=no \
+          -o UserKnownHostsFile=/dev/null \
+          -o LogLevel=ERROR \
+          "root@$HOST" "''${PASSTHROUGH_ARGS[@]}"
+      fi
     '';
   };
 

@@ -40,18 +40,24 @@ nix run .#k8s-check-host
 # 3. Create bridge, 4 TAP devices, nftables NAT, haproxy apiserver LB
 sudo nix run .#k8s-network-setup
 
-# 4. Build and start all 4 VMs — bootstrap runs automatically on cp0
+# 4. Generate application secrets (one time; regenerate with --force)
+nix run .#k8s-gen-secrets
+
+# 5. Build and start all 4 VMs — bootstrap runs automatically on cp0
 nix run .#k8s-start-all
 
-# 5. Watch bootstrap progress (Cilium → CoreDNS → ArgoCD → Applications)
+# 6. Watch bootstrap progress (Cilium → CoreDNS → ArgoCD → Secrets → Applications)
 nix run .#k8s-vm-ssh -- --node=cp0 journalctl -fu k8s-gitops-bootstrap
 
-# 6. Verify the cluster
+# 7. Verify the cluster
 nix run .#k8s-vm-ssh -- --node=cp0 kubectl get nodes
 nix run .#k8s-vm-ssh -- --node=cp0 kubectl get pods -A
 ```
 
 PKI is generated at build time and baked into VM images — no separate cert step needed.
+Application secrets (CH passwords, Matrix tokens, Anubis key, registry credentials) are
+pre-generated offline by step 4 and injected automatically at boot. See
+[docs/secrets.md](docs/secrets.md) for the full design.
 
 ### Wipe and Rebuild
 
@@ -90,7 +96,7 @@ nix run .#k8s-vm-ssh -- --node=cp0 kubectl -n argocd get applications
 |---------|-----|-------|
 | ArgoCD UI | `https://10.33.33.10:30443` | NodePort (any node IP works) |
 
-ArgoCD manages 10 Applications (cilium, argocd, base, cert-manager, clickhouse, foundationdb, matrix, nginx, tidb, postgres) via the rendered manifests pattern. After first boot, ArgoCD is the source of truth via git.
+ArgoCD manages 12 Applications (cilium, argocd, base, cert-manager, clickhouse, foundationdb, matrix, nginx, observability, registry, tidb, postgres) via the rendered manifests pattern. After first boot, ArgoCD is the source of truth via git.
 
 ```bash
 # Get the initial admin password
@@ -128,24 +134,6 @@ hubble --server 10.33.33.10:31245 observe --last 20
 | Cilium Agent metrics | `:9962` on all nodes | Prometheus scrape target |
 | Cilium Operator metrics | `:9963` | Single instance |
 | Hubble metrics | `:9965` on all nodes | Flow metrics |
-
-### Observability (planned — ClickStack)
-
-Comprehensive visibility — logs, traces, metrics, and Cilium/Hubble flows —
-unified into the existing ClickHouse cluster and surfaced through ClickStack
-UI (upstream project: HyperDX). A single-tier OpenTelemetry Collector
-DaemonSet per node tails pod stdout/stderr, Kubelet stats, host metrics,
-and K8s events; apps export traces to it over a shared hostPath **Unix
-domain socket** (`/var/run/otel/collector.sock`); a `hubble-otel` DS reads
-Cilium Hubble's agent UDS (`/var/run/cilium/hubble.sock`) and forwards over
-UDS to the local collector; Prometheus on cp0 bridges its scrapes via
-loopback `remote_write`. The collector is co-located with a ClickHouse
-replica on every node (the existing `ch4` cluster's podAntiAffinity gives
-us one CH per node) so the final write is `127.0.0.1:9000` loopback TCP —
-ClickHouse has no UDS listener ([CH#22260](https://github.com/ClickHouse/ClickHouse/issues/22260),
-*not planned*), and loopback is the fastest path available there. Design:
-[docs/observability.md](docs/observability.md). Not yet implemented — the
-design document lands first; the manifests follow in a subsequent PR.
 
 ### TiDB (Distributed SQL)
 
@@ -270,9 +258,9 @@ Rotate the Anubis signing key: `nix run .#k8s-anubis-bootstrap-secrets -- --forc
 | ClickStack UI (HyperDX) | `https://clickstack.lab.local/` | Cilium Ingress + `selfsigned-lab` cert. Backed by the ch4 ClickHouse cluster (`otel` database) and an emptyDir MongoDB. |
 | OTel Collector `/metrics` | `http://<node-ip>:8888/metrics` | Each collector pod's self-telemetry (DS on all 4 CH nodes). |
 | hubble-otel DS | `observability/hubble-otel` | DS on every CH node; reads Hubble L3/L4/L7 flows from the local cilium-agent and exports OTLP to the collector Service. Built from the archived `cilium/hubble-otel` repo via `nix build .#hubble-otel-image` and pushed to the in-cluster Zot registry. |
-| Schema-bootstrap Job | `observability/otel-schema-bootstrap` | ArgoCD sync-wave 1 hook; applies the canonical OTel v0.118 DDL on every sync. |
+| Schema-bootstrap Job | `observability/otel-schema-bootstrap` | ArgoCD sync-wave 1 hook; applies the canonical OTel v0.140 DDL on every sync. |
 
-Unified logs + traces + metrics pipeline: each node runs an OTel Collector DaemonSet that accepts OTLP over a UDS at `/var/run/otel/collector.sock` (zero-NIC ingress from co-located workloads), enriches with k8s attributes, and writes to a co-located ClickHouse replica over loopback TCP (`127.0.0.1:9000`). Prometheus on cp0 mirrors every scrape target into the collector via `prometheusremotewrite`. See [docs/observability.md](docs/observability.md) for the full design.
+Unified logs + traces + metrics pipeline: each node runs an OTel Collector DaemonSet that accepts OTLP over a UDS at `/var/run/otel/collector.sock` (zero-NIC ingress from co-located workloads), enriches with k8s attributes, and writes to a co-located ClickHouse replica via the `clickhouse-local` Service (`internalTrafficPolicy: Local`, native protocol port 9000). Prometheus on cp0 mirrors every scrape target into the collector via `prometheusremotewrite`. See [docs/observability.md](docs/observability.md) for the full architecture.
 
 ```bash
 # 1. /etc/hosts on the dev host:
@@ -393,9 +381,38 @@ All targets are Linux-only (QEMU MicroVMs). Run any target with `nix run .#<name
 | `k8s-cluster-rebuild` | No | Wipe + start-all in one command. Full clean rebuild from scratch |
 | `k8s-vm-check` | No | List running K8s MicroVM QEMU processes |
 | `k8s-vm-ssh` | No | SSH into a node. Default: cp0. Use `--node=cp1` for others |
+
+### Chaos Testing
+
+| Target | Sudo | Description |
+|--------|:----:|-------------|
 | `k8s-chaos-failover` | No | Loop-kill nodes one at a time; measure per-DB failover recovery time |
+
+### Matrix
+
+| Target | Sudo | Description |
+|--------|:----:|-------------|
 | `k8s-matrix-register-user` | No | Register a Matrix user via Synapse admin API. `--username=<name> [--admin]` |
 | `k8s-matrix-bootstrap-secrets` | No | Generate Matrix tokens + secrets, create `matrix-secrets` K8s Secret. See docs/matrix.md |
+
+### Anubis
+
+| Target | Sudo | Description |
+|--------|:----:|-------------|
+| `k8s-anubis-bootstrap-secrets` | No | Generate Anubis ED25519 signing key, create `anubis-secrets` K8s Secret in ns=nginx |
+
+### Observability
+
+| Target | Sudo | Description |
+|--------|:----:|-------------|
+| `k8s-observability-bootstrap-secrets` | No | Create CH users (otel writer, hyperdx reader) + populate K8s Secrets |
+
+### Registry (Zot)
+
+| Target | Sudo | Description |
+|--------|:----:|-------------|
+| `k8s-registry-bootstrap-secrets` | No | Generate htpasswd for push user + populate TLS Secret from node PKI |
+| `k8s-registry-push` | No | Push a Nix-built OCI image (docker-archive tarball) into the in-cluster Zot registry |
 
 ### GitOps & Manifests
 
@@ -404,11 +421,12 @@ All targets are Linux-only (QEMU MicroVMs). Run any target with `nix run .#<name
 | `k8s-render-manifests` | No | Render Helm charts + Nix manifests to `rendered/` directory. Use `--check` for CI |
 | `k8s-manifests` (package) | No | `nix build .#k8s-manifests` — build all rendered YAML to Nix store |
 
-### Certificates
+### Certificates & Secrets
 
 | Target | Sudo | Description |
 |--------|:----:|-------------|
 | `k8s-gen-certs` | No | Copy build-time PKI to `./certs/` for inspection |
+| `k8s-gen-secrets` | No | Generate application secrets into `./secrets/`. See [docs/secrets.md](docs/secrets.md) |
 
 ### VM Packages
 
@@ -439,7 +457,7 @@ Build individual VM images with `nix build .#<name>`:
 nix develop
 ```
 
-Available tools: `kubectl`, `kubernetes-helm`, `cilium-cli`, `hubble`, `argocd`, `step-cli`, `socat`, `expect`, `sshpass`, `jq`, `mariadb`, `sysbench`, `nftables`, `iproute2`, `curl`
+Available tools: `kubectl`, `kubernetes-helm`, `cilium-cli`, `hubble`, `argocd`, `step-cli`, `socat`, `expect`, `sshpass`, `jq`, `mariadb`, `sysbench`, `postgresql` (psql), `clickhouse`, `foundationdb` (fdbcli), `bc`, `nftables`, `iproute2`, `curl`, `mkcert`, `openssl`, `apacheHttpd` (htpasswd)
 
 ## Bootstrap Sequence
 
@@ -456,7 +474,7 @@ On first boot, a systemd oneshot service (`k8s-gitops-bootstrap`) on cp0 automat
    └── Wait for Application CRD + argocd-server rollout
 6. Apply all ArgoCD Application CRs
    (cilium, argocd, base, cert-manager, clickhouse, foundationdb,
-    matrix, nginx, tidb, postgres)
+    matrix, nginx, observability, registry, tidb, postgres)
 7. Touch /var/lib/k8s-bootstrap/done (idempotent marker)
 ```
 
@@ -483,6 +501,9 @@ This project implements the [rendered manifests pattern](https://akuity.io/blog/
 |-------|---------|-------------|
 | Cilium | 1.19.3 | 1.19.3 |
 | ArgoCD (argo-cd) | 9.5.0 | v3.3.6 |
+| CloudNativePG (CNPG) | 0.28.0 | v1.29.0 |
+| OpenTelemetry Collector | 0.140.0 | 0.140.0 |
+| ClickStack | 1.1.1 | 2.8.0 |
 
 ### Workflow
 
@@ -519,6 +540,8 @@ nix run .#k8s-render-manifests -- --check
 | **Cilium Ingress** | Helm-rendered (folded into Cilium) | Envoy-based ingress controller, LoadBalancer Service on L2-announced VIP `10.33.33.50` |
 | **cert-manager** | Upstream YAML + CRs | `selfsigned-lab` ClusterIssuer (phase 1); stub `letsencrypt-prod-dns01` (phase 2) |
 | **Matrix** | Plain YAML + CNPG `Database` CRs | Synapse + Element + hookshot + maubot + mautrix-discord on `matrix.lab.local` |
+| **Observability** | Helm-rendered + Plain YAML | OTel Collector DaemonSet + ClickStack UI (HyperDX) + hubble-otel DS + schema-bootstrap Job → `otel` database in existing ClickHouse cluster |
+| **Registry (Zot)** | Plain YAML | In-cluster OCI registry on dedicated LB VIP `10.33.33.51`; anonymous pull, htpasswd-gated push |
 
 ## Certificate Architecture (PKI)
 
@@ -786,11 +809,20 @@ nix/
 ├── gitops-bootstrap-module.nix  # NixOS module: first-boot oneshot (Cilium→CoreDNS→ArgoCD→Apps)
 ├── network-setup.nix            # Bridge + TAP + NAT + haproxy LB setup/teardown
 ├── certs.nix                    # Build-time PKI: 3 CAs + per-component certs, baked into VMs
+├── secrets-gen.nix              # Offline secret generation (→ ./secrets/). See docs/secrets.md
+├── secrets.nix                  # Build-time: reads ./secrets/, emits K8s Secret JSON manifests
 ├── cert-inject.nix              # Legacy: expect-driven cert transfer over virtio (manual use)
 ├── microvm-scripts.nix          # VM management: check, stop, ssh, start-all, wipe, rebuild
+├── chaos-scripts.nix            # Chaos failover test runner (k8s-chaos-failover)
+├── matrix-scripts.nix           # Matrix user registration & secret bootstrap
+├── anubis-scripts.nix           # Anubis ED25519 key bootstrap
+├── observability-scripts.nix    # Observability CH user + secret bootstrap
+├── registry-scripts.nix         # In-cluster Zot registry push + secret bootstrap
 ├── render-script.nix            # Rendered manifests → nix run .#k8s-render-manifests
 ├── shell.nix                    # devShell: kubectl, helm, cilium-cli, hubble, argocd, ...
 ├── test-lib.nix                 # Shared bash helpers (color, timing, assertions)
+├── images/
+│   └── hubble-otel.nix          # hubble-otel OCI image builder (archived cilium/hubble-otel)
 ├── lifecycle/
 │   ├── default.nix              # Lifecycle test orchestrator (per-node + test-all + cluster)
 │   ├── lib.nix                  # Script generators (process, console, SSH, timing helpers)
@@ -813,7 +845,9 @@ nix/
     │   ├── tidb.nix             # TiDB 3 PD + 4 TiKV + 2 TiDB + sysbench + Application
     │   ├── postgres.nix         # CNPG operator (helm) + Cluster CR (1 primary + 3 replicas) + Application
     │   ├── cert-manager.nix     # cert-manager + selfsigned-lab ClusterIssuer (phase 1) + stub LE DNS-01 (phase 2)
-    │   └── matrix.nix           # Matrix stack aggregator: Synapse + Element + hookshot + maubot + mautrix-discord
+    │   ├── matrix.nix           # Matrix stack aggregator: Synapse + Element + hookshot + maubot + mautrix-discord
+    │   ├── observability.nix    # OTel Collector (helm) + ClickStack UI (helm) + hubble-otel DS + schema-bootstrap Job
+    │   └── registry.nix         # In-cluster Zot OCI registry + dedicated LB VIP + containerd mirror config
     └── matrix/
         ├── shared.nix           # CNPG Database CRs, matrix-tls Certificate, single Ingress (4 hosts)
         ├── synapse.nix          # Synapse Deployment + ConfigMap + PVC + Services (ClusterIP + admin NodePort)
@@ -821,6 +855,10 @@ nix/
         ├── hookshot.nix         # matrix-hookshot Deployment + registration/config ConfigMaps + Service
         ├── maubot.nix           # maubot Deployment + plugins PVC + config ConfigMap + Service
         └── mautrix-discord.nix  # mautrix-discord Deployment + registration/config ConfigMaps + Service
+docs/
+├── observability.md             # Observability subsystem architecture (OTel + ClickStack)
+├── matrix.md                    # Matrix stack architecture and bootstrapping
+└── secrets.md                   # Secrets management design (offline gen → auto-injection)
 rendered/                        # Committed rendered manifests (git-tracked)
 ├── argocd/                      # ArgoCD install.yaml (helm-rendered), values, Application CR
 ├── base/                        # Namespaces, RBAC, CoreDNS
@@ -831,7 +869,9 @@ rendered/                        # Committed rendered manifests (git-tracked)
 ├── tidb/                        # TiDB PD + TiKV + TiDB + sysbench manifests
 ├── postgres/                    # local-path-provisioner, CNPG operator (helm-rendered), Cluster CR, NodePort services
 ├── cert-manager/                # Upstream install + selfsigned-lab ClusterIssuer chain + Application
-└── matrix/                      # Synapse, Element, hookshot, maubot, mautrix-discord, Ingress, Certificate, Databases
+├── matrix/                      # Synapse, Element, hookshot, maubot, mautrix-discord, Ingress, Certificate, Databases
+├── observability/               # OTel Collector, ClickStack UI, hubble-otel, schema-bootstrap Job
+└── registry/                    # Zot registry, LB VIP pool, htpasswd + TLS Secrets
 ```
 
 ## Design Decisions
@@ -846,6 +886,7 @@ rendered/                        # Committed rendered manifests (git-tracked)
 | 3 CP + haproxy LB | 3-node etcd quorum tolerates 1 CP failure; haproxy on bridge IP provides apiserver HA |
 | Host-side haproxy (not Cilium) | Apiserver endpoint must exist before Cilium boots (chicken-and-egg) |
 | Build-time PKI | Certs baked into VM images via Nix — no runtime injection, fully reproducible |
+| Offline secrets pre-generation | `k8s-gen-secrets` generates random material once; Nix builds K8s Secret manifests; bootstrap applies them. Zero manual steps. See [docs/secrets.md](docs/secrets.md) |
 | 3 separate CAs | Isolates trust domains: cluster, etcd, and front-proxy (K8s best practice) |
 | Cilium replaces kube-proxy | eBPF-based, no iptables overhead, native dual-stack |
 | Pinned chart hashes | Reproducible builds — chart tarballs fetched with SRI hash verification |

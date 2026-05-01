@@ -347,6 +347,7 @@ in
             syncOptions:
               - ServerSideApply=true
               - CreateNamespace=true
+              - RespectIgnoreDifferences=true
           ignoreDifferences:
             # Bootstrap script rewrites these Secrets' data
             # out-of-band (htpasswd entry; TLS cert/key pulled from

@@ -4,9 +4,12 @@
 #
 # On the first boot where /var/lib/k8s-bootstrap/done does not exist, a
 # systemd oneshot applies, in order:
-#   1. rendered/cilium/install.yaml  (CNI must be up before anything else)
-#   2. rendered/argocd/install.yaml  (ArgoCD controller + server + CRDs)
-#   3. rendered/*/application*.yaml  (all Application CRs — ArgoCD takes over)
+#   1.  rendered/cilium/install.yaml  (CNI must be up before anything else)
+#   1b. rendered/base/ (namespaces, RBAC, CoreDNS)
+#   2.  rendered/argocd/install.yaml  (ArgoCD controller + server + CRDs)
+#   2b. Pre-generated Secrets (if secretsPath is set)
+#   3.  rendered/*/application*.yaml  (all Application CRs — ArgoCD takes over)
+#   4.  Post-deploy: patch matrix Secret with live PG password from CNPG
 #
 # The rendered manifests are injected as a Nix-store path via
 # `services.k8s-gitops-bootstrap.manifestsPath`, so no git fetch is needed
@@ -34,11 +37,22 @@ in
         cilium/install.yaml, argocd/install.yaml, and */application*.yaml.
       '';
     };
+
+    secretsPath = mkOption {
+      type = types.nullOr types.path;
+      default = null;
+      description = ''
+        Path to pre-generated K8s Secret manifests (JSON files from
+        nix/secrets.nix). Applied between ArgoCD install and Application
+        CRs so Secrets exist before workloads reference them. Set to null
+        to skip (Secrets will use __BOOTSTRAPPED_OUT_OF_BAND__ placeholders).
+      '';
+    };
   };
 
   config = mkIf cfg.enable {
     systemd.services.k8s-gitops-bootstrap = {
-      description = "First-boot GitOps bootstrap: Cilium -> ArgoCD -> Applications";
+      description = "First-boot GitOps bootstrap: Cilium -> ArgoCD -> Secrets -> Applications";
 
       # Needs a functioning apiserver before it can kubectl apply. On cp0
       # the apiserver is local, so after kubelet.service is up enough to
@@ -52,7 +66,7 @@ in
         ConditionPathExists = "!${markerFile}";
       };
 
-      path = with pkgs; [ kubectl curl coreutils findutils gnugrep gnused ];
+      path = with pkgs; [ kubectl curl coreutils findutils gnugrep gnused jq ];
 
       serviceConfig = {
         Type = "oneshot";
@@ -144,12 +158,83 @@ in
           }
         fi
 
+        # ── 2b. Pre-generated Secrets ──────────────────────────────────
+        # If nix/secrets.nix produced a secretsPath, apply all Secret
+        # manifests now — before Application CRs, so workloads find
+        # their Secrets already populated on first rollout.
+        ${optionalString (cfg.secretsPath != null) ''
+          if [ -d "${cfg.secretsPath}" ]; then
+            log "applying pre-generated secrets from ${cfg.secretsPath}"
+            find "${cfg.secretsPath}" -name '*.json' -print0 |
+              while IFS= read -r -d "" f; do
+                apply_file "$f"
+              done
+          fi
+        ''}
+
+        # ── 2c. registry-tls Secret from node PKI ──────────────────────
+        # The registry TLS cert lives on every node at
+        # /var/lib/kubernetes/pki/registry-tls.{crt,key}, copied from
+        # pkiStore by the activation script. We create the K8s Secret
+        # from the LOCAL filesystem so the cert is guaranteed to come
+        # from the same CA build that nodes trust. (pkiStore is
+        # non-deterministic; reading it via a separate Nix derivation
+        # risks a GC-induced rebuild producing a different CA.)
+        if [ -f "${constants.k8s.pkiDir}/registry-tls.crt" ] && \
+           [ -f "${constants.k8s.pkiDir}/registry-tls.key" ]; then
+          log "creating registry-tls Secret from node PKI"
+          kubectl -n ${constants.registry.namespace} create secret tls registry-tls \
+            --cert="${constants.k8s.pkiDir}/registry-tls.crt" \
+            --key="${constants.k8s.pkiDir}/registry-tls.key" \
+            --dry-run=client -o json | kubectl apply --server-side --force-conflicts -f -
+        fi
+
         # ── 3. Application CRs (ArgoCD takes over from here) ──────────
         log "applying Application CRs"
         find ${cfg.manifestsPath} -maxdepth 2 -name 'application*.yaml' -print0 |
           while IFS= read -r -d "" f; do
             apply_file "$f"
           done
+
+        # ── 4. Post-deploy: patch matrix Secret with live PG password ──
+        # CNPG auto-generates the pg-app Secret when the Cluster CR is
+        # applied (step 3). The matrix-secrets homeserver.secrets.yaml
+        # has a __PG_PASSWORD_INJECTED_AT_BOOT__ placeholder — wait for
+        # CNPG to create pg-app, read the real password, and patch.
+        ${optionalString (cfg.secretsPath != null) ''
+          if kubectl -n matrix get secret matrix-secrets >/dev/null 2>&1; then
+            log "waiting for CNPG pg-app Secret"
+            PG_READY="no"
+            for i in $(seq 1 120); do
+              if kubectl -n postgres get secret pg-app -o jsonpath='{.data.password}' 2>/dev/null | grep -q .; then
+                PG_READY="yes"
+                break
+              fi
+              sleep 5
+            done
+
+            if [ "$PG_READY" = "yes" ]; then
+              PG_PASS=$(kubectl -n postgres get secret pg-app -o jsonpath='{.data.password}' | base64 -d)
+              log "patching matrix-secrets with live PG password"
+
+              # Read the current homeserver.secrets.yaml, replace placeholder
+              CURRENT_HS=$(kubectl -n matrix get secret matrix-secrets \
+                -o jsonpath='{.data.homeserver\.secrets\.yaml}' | base64 -d)
+              PATCHED_HS=$(echo "$CURRENT_HS" | sed "s/__PG_PASSWORD_INJECTED_AT_BOOT__/$PG_PASS/g")
+
+              # Build a JSON merge-patch with jq (handles quoting safely)
+              PATCH=$(jq -n \
+                --arg hs "$PATCHED_HS" \
+                --arg pg "$PG_PASS" \
+                '{stringData:{"homeserver.secrets.yaml":$hs, pg_app_password:$pg}}')
+              kubectl -n matrix patch secret matrix-secrets --type merge -p "$PATCH"
+
+              log "matrix-secrets patched with PG password"
+            else
+              log "WARN: pg-app Secret not ready after 10min; matrix-secrets not patched"
+            fi
+          fi
+        ''}
 
         touch ${markerFile}
         log "bootstrap complete — marker: ${markerFile}"
