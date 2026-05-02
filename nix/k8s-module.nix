@@ -429,5 +429,12 @@ in
 
     # ─── Firewall ─────────────────────────────────────────────────────
     networking.firewall.enable = false;
+
+    # ─── Disable systemd-resolved ────────────────────────────────────
+    # systemd-resolved binds 127.0.0.53:53 and 127.0.0.54:53 which
+    # conflicts with the PowerDNS DaemonSet (hostNetwork, 0.0.0.0:53).
+    # Cluster DNS is handled by CoreDNS; node-level resolution uses
+    # /etc/hosts entries configured above.
+    services.resolved.enable = false;
   };
 }
