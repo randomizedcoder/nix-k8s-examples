@@ -157,6 +157,23 @@ in
         ca = "${pki}/ca.crt"
     '';
 
+    # ─── Docker Hub pull-through cache via Zot ───────────────────────
+    # When containerd pulls a docker.io image, it tries the local Zot
+    # registry first. Zot's sync extension (see registry.nix) proxies
+    # to Docker Hub on cache miss, caches the blobs locally, and serves
+    # them. Subsequent pulls from any node hit the cache — avoids
+    # Docker Hub's anonymous rate limit (100 pulls/6h) during cluster
+    # bootstrap when all 4 nodes pull simultaneously.
+    # Falls back to Docker Hub if Zot is unreachable (e.g. during
+    # initial bootstrap before the registry pod is up).
+    environment.etc."containerd/certs.d/docker.io/hosts.toml".text = ''
+      server = "https://registry-1.docker.io"
+
+      [host."https://${constants.registry.host}"]
+        capabilities = ["pull", "resolve"]
+        ca = "${pki}/ca.crt"
+    '';
+
     # ─── /etc/hosts: in-cluster registry ─────────────────────────────
     # Every node resolves registry.lab.local to the Zot LB VIP so
     # containerd (and skopeo/crictl invoked on the host) reach the

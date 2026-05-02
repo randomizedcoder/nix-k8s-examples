@@ -36,6 +36,25 @@ data:
           }
         }
       },
+      "extensions": {
+        "sync": {
+          "enable": true,
+          "registries": [
+            {
+              "urls": ["https://registry-1.docker.io"],
+              "onDemand": true,
+              "tlsVerify": true,
+              "maxRetries": 3,
+              "retryDelay": "5m",
+              "content": [
+                {
+                  "prefix": "**"
+                }
+              ]
+            }
+          ]
+        }
+      },
       "log": {
         "level": "info"
       }

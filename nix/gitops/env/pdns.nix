@@ -397,7 +397,7 @@ in
                 effect: "NoSchedule"
               initContainers:
               - name: template-config
-                image: busybox:1.36
+                image: ${constants.registry.host}/library/busybox:1.36
                 command:
                 - sh
                 - -c
