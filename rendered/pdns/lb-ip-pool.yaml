@@ -1,0 +1,12 @@
+apiVersion: cilium.io/v2
+kind: CiliumLoadBalancerIPPool
+metadata:
+  name: pdns-lb-pool
+spec:
+  serviceSelector:
+    matchLabels:
+      app: pdns-auth
+  blocks:
+  - start: "10.33.33.52"
+    stop:  "10.33.33.52"
+

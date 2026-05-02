@@ -12,8 +12,30 @@ spec:
   - hosts:
     - hello.lab.local
     secretName: nginx-tls
+  - hosts:
+    - seddon.ca
+    - xtcp.io
+    secretName: nginx-le-tls
   rules:
   - host: hello.lab.local
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: anubis
+            port: { number: 8080 }
+  - host: seddon.ca
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: anubis
+            port: { number: 8080 }
+  - host: xtcp.io
     http:
       paths:
       - path: /

@@ -1,0 +1,13 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: pdns
+  namespace: postgres
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  name: pdns
+  owner: app
+  cluster:
+    name: pg
+

@@ -232,6 +232,21 @@
             };
           }
 
+          # PowerDNS tests
+          // (let
+            pdnsTestScripts = import (nixDir + "/pdns-test.nix") { inherit pkgs; };
+            pdnsFailoverScripts = import (nixDir + "/pdns-failover-test.nix") { inherit pkgs; };
+          in {
+            k8s-pdns-test = {
+              type = "app";
+              program = "${pdnsTestScripts.pdnsTest}/bin/k8s-pdns-test";
+            };
+            k8s-pdns-failover-test = {
+              type = "app";
+              program = "${pdnsFailoverScripts.pdnsFailoverTest}/bin/k8s-pdns-failover-test";
+            };
+          })
+
           # Matrix operator helpers
           // (let
             matrixScripts = import (nixDir + "/matrix-scripts.nix") { inherit pkgs; };

@@ -230,6 +230,16 @@ in
               kubectl -n matrix patch secret matrix-secrets --type merge -p "$PATCH"
 
               log "matrix-secrets patched with PG password"
+
+              # ── Patch pdns-credentials with the same PG password ──────
+              if kubectl -n ${constants.pdns.namespace} get secret pdns-credentials >/dev/null 2>&1; then
+                log "patching pdns-credentials with live PG password"
+                PDNS_PATCH=$(jq -n \
+                  --arg pg "$PG_PASS" \
+                  '{stringData:{"pg-password":$pg}}')
+                kubectl -n ${constants.pdns.namespace} patch secret pdns-credentials --type merge -p "$PDNS_PATCH"
+                log "pdns-credentials patched with PG password"
+              fi
             else
               log "WARN: pg-app Secret not ready after 10min; matrix-secrets not patched"
             fi

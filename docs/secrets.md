@@ -6,7 +6,7 @@ cluster boot. Zero manual steps after `k8s-gen-secrets`.
 ## Quick Start
 
 ```bash
-nix run .#k8s-gen-secrets          # generate 15 secret files into ./secrets/
+nix run .#k8s-gen-secrets          # generate 17 secret files into ./secrets/
 nix run .#k8s-cluster-rebuild      # cluster builds with secrets baked in
 ```
 
@@ -21,11 +21,12 @@ nix run .#k8s-cluster-rebuild          # rebuild picks up new values
 
 ```
 Offline (host):
-  nix run .#k8s-gen-secrets     -->  ./secrets/  (17 files, git-staged)
+  nix run .#k8s-gen-secrets     -->  ./secrets/  (19 files, git-staged)
                                        |- anubis-ed25519-key
                                        |- matrix-{macaroon,form,registration,...} (11 files)
                                        |- ch-{otel,hyperdx}-password
                                        |- registry-push-password
+                                       |- pdns-{api-key,tsig-secret}
                                        '- ssh-ed25519{,.pub}
 
 Build time (nix build):
@@ -33,7 +34,7 @@ Build time (nix build):
     - bcrypt hashes (maubot admin, registry htpasswd)
     - JSON configs (ClickStack connections.json, sources.json)
     - homeserver.secrets.yaml (PG password = placeholder)
-    - 5 K8s Secret manifests (JSON format)
+    - 7 K8s Secret manifests (JSON format)
     - SSH public key → baked into each VM's authorized_keys
 
 Boot time (cp0 first boot):
@@ -65,6 +66,8 @@ Post-boot (automated):
 | `ch-otel-password` | `otel-ch-credentials` | observability | CH `otel` writer password |
 | `ch-hyperdx-password` | `otel-ch-credentials` + `clickstack-hyperdx-config` | observability | CH `hyperdx` reader password |
 | `registry-push-password` | `registry-htpasswd` | registry | Zot push user password (bcrypted at build) |
+| `pdns-api-key` | `pdns-credentials` | pdns | PowerDNS API key |
+| `pdns-tsig-secret` | `pdns-credentials` + `pdns-tsig-secret` | pdns, cert-manager | TSIG key for RFC2136 dynamic DNS updates |
 | `ssh-ed25519` | *(host only)* | -- | SSH private key for MicroVM access |
 | `ssh-ed25519.pub` | *(baked into VMs)* | -- | SSH public key → `authorized_keys` on all VMs |
 
@@ -88,8 +91,9 @@ Post-boot (automated):
 nix run .#k8s-gen-secrets
 ```
 
-Creates `./secrets/` with 17 files: 15 random hex secrets plus an SSH
-ED25519 key pair (`ssh-ed25519` + `ssh-ed25519.pub`). Most secrets are
+Creates `./secrets/` with 19 files: 16 random hex secrets, 1 base64
+TSIG key, plus an SSH ED25519 key pair (`ssh-ed25519` +
+`ssh-ed25519.pub`). Most secrets are
 `openssl rand -hex 32` (64-char hex); the registry password is
 `openssl rand -hex 24`. The maubot admin password can be set via
 `$MAUBOT_ADMIN` env var; otherwise random.
@@ -105,12 +109,12 @@ The script also runs `git add secrets/` so Nix flakes can see the files
 `nix/secrets.nix` uses `builtins.pathExists ../secrets` to detect whether
 secrets exist. If yes, it:
 
-- Reads all 15 raw files via `builtins.readFile`
+- Reads all 17 raw files via `builtins.readFile`
 - Derives bcrypt hashes (htpasswd for registry, bcrypt for maubot admin)
 - Derives JSON configs (ClickStack connections.json and sources.json)
 - Builds `homeserver.secrets.yaml` with a `__PG_PASSWORD_INJECTED_AT_BOOT__`
   placeholder for the PG password (CNPG owns that)
-- Emits 5 K8s Secret manifests as JSON files in a `k8sSecrets` derivation
+- Emits 7 K8s Secret manifests as JSON files in a `k8sSecrets` derivation
 
 If `./secrets/` doesn't exist, `k8sSecrets = null` and the cluster builds
 normally -- Secrets keep their `__BOOTSTRAPPED_OUT_OF_BAND__` placeholders.
@@ -218,4 +222,5 @@ nix run .#k8s-cluster-rebuild     # everything automated
 | `nix/gitops-bootstrap-module.nix` | Step 2b (apply secrets) + step 4 (PG password patch) |
 | `nix/microvm.nix` | Passes `k8sSecrets` to bootstrap, adds registry-push service |
 | `nix/gitops/env/observability.nix` | CH DDL Job manifest (`otel-ch-users`) |
+| `nix/gitops/env/pdns.nix` | PowerDNS manifests (DaemonSet, schema Jobs, Cilium LB) |
 | `flake.nix` | Wires secrets.nix, secrets-gen.nix, hubbleOtelImage into build |

@@ -318,6 +318,27 @@ rec {
   # ─── nginx hello-world site (fronted by Anubis) ───────────────────
   nginx = {
     hostName = "hello.lab.local";
+    # Public domains served via Let's Encrypt (DNS-01 via PowerDNS).
+    leDomains = [ "seddon.ca" "xtcp.io" ];
+  };
+
+  # ─── PowerDNS Authoritative DNS ────────────────────────────────────
+  # Runs on every node (DaemonSet + hostNetwork, port 53 UDP+TCP),
+  # backed by the CNPG PostgreSQL cluster via gpgsql backend.
+  # Serves authoritative DNS for public domains and supports
+  # RFC2136 dynamic updates (TSIG) for cert-manager ACME DNS-01.
+  pdns = {
+    namespace = "pdns";
+    domains   = [ "seddon.ca" "xtcp.io" ];
+    image     = "powerdns/pdns-auth-49:4.9.3";
+    database  = "pdns";
+    pgUser    = "app";           # reuse CNPG-managed user
+    vip       = "10.33.33.52";
+    dnsPort   = 53;
+    apiPort   = 8081;
+    acmeEmail = "ops@seddon.ca";
+    tsigKeyName    = "acme-update";
+    tsigAlgorithm  = "hmac-sha256";
   };
 
   # ─── In-cluster OCI registry (Zot) ────────────────────────────────

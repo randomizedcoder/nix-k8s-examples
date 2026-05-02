@@ -20,6 +20,20 @@ let
   constants = import ../../constants.nix;
   n = constants.nginx;
   a = constants.anubis;
+
+  # Pre-build LE domain YAML snippets to avoid Nix string indentation issues
+  leTlsHosts = lib.concatMapStringsSep "\n    " (d: "- ${d}") n.leDomains;
+  leDnsNames = lib.concatMapStringsSep "\n  " (d: "- ${d}") n.leDomains;
+  leIngressRules = lib.concatMapStringsSep "\n  " (d: ''
+- host: ${d}
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: anubis
+            port: { number: ${toString a.port} }'') n.leDomains;
 in
 {
   manifests = [
@@ -250,7 +264,36 @@ in
       '';
     }
 
-    # ─── Ingress (hello.lab.local → anubis → nginx) ────────────────
+    # ─── Let's Encrypt TLS (seddon.ca, xtcp.io) ──────────────────────
+    # DNS-01 via RFC2136 → PowerDNS. Separate from the lab self-signed
+    # cert so hello.lab.local keeps working even without internet.
+    {
+      name = "nginx/certificate-le.yaml";
+      content = ''
+        apiVersion: cert-manager.io/v1
+        kind: Certificate
+        metadata:
+          name: nginx-le-tls
+          namespace: nginx
+          annotations:
+            argocd.argoproj.io/sync-wave: "3"
+        spec:
+          secretName: nginx-le-tls
+          duration: 2160h
+          renewBefore: 720h
+          privateKey:
+            algorithm: ECDSA
+            size: 256
+          dnsNames:
+          ${leDnsNames}
+          issuerRef:
+            name: letsencrypt-prod-dns01
+            kind: ClusterIssuer
+            group: cert-manager.io
+      '';
+    }
+
+    # ─── Ingress (all domains → anubis → nginx) ───────────────────
     {
       name = "nginx/ingress.yaml";
       content = ''
@@ -268,6 +311,9 @@ in
           - hosts:
             - ${n.hostName}
             secretName: nginx-tls
+          - hosts:
+            ${leTlsHosts}
+            secretName: nginx-le-tls
           rules:
           - host: ${n.hostName}
             http:
@@ -278,6 +324,7 @@ in
                   service:
                     name: anubis
                     port: { number: ${toString a.port} }
+          ${leIngressRules}
       '';
     }
 

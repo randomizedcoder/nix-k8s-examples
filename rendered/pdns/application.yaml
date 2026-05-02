@@ -1,19 +1,19 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: registry
+  name: pdns
   namespace: argocd
 spec:
   project: default
   source:
     repoURL: https://github.com/randomizedcoder/nix-k8s-examples.git
     targetRevision: main
-    path: rendered/registry
+    path: rendered/pdns
     directory:
       exclude: 'application.yaml'
   destination:
     server: https://kubernetes.default.svc
-    namespace: registry
+    namespace: pdns
   syncPolicy:
     automated:
       prune: true
@@ -23,18 +23,9 @@ spec:
       - CreateNamespace=true
       - RespectIgnoreDifferences=true
   ignoreDifferences:
-    # Bootstrap script rewrites these Secrets' data
-    # out-of-band (htpasswd entry; TLS cert/key pulled from
-    # the node PKI dir). Prevent ArgoCD from reverting them
-    # back to the in-git placeholders on every self-heal.
     - group: ""
       kind: Secret
-      name: registry-htpasswd
-      namespace: registry
-      jsonPointers: ["/data", "/stringData"]
-    - group: ""
-      kind: Secret
-      name: registry-tls
-      namespace: registry
+      name: pdns-credentials
+      namespace: pdns
       jsonPointers: ["/data", "/stringData"]
 

@@ -22,6 +22,7 @@ let
   o  = constants.observability;
   ch = o.clickhouse;
   r  = constants.registry;
+  p  = constants.pdns;
 in
 if !hasSecrets then { k8sSecrets = null; sshPubKey = null; }
 else
@@ -44,6 +45,8 @@ let
   chOtelPassword       = read "ch-otel-password";
   chHyperdxPassword    = read "ch-hyperdx-password";
   registryPushPassword = read "registry-push-password";
+  pdnsApiKey           = read "pdns-api-key";
+  pdnsTsigSecret       = read "pdns-tsig-secret";
 
   # SSH public key for MicroVM authorized_keys
   sshPubKeyFile = secretsDir + "/ssh-ed25519.pub";
@@ -74,6 +77,8 @@ let
     CH_OTEL_PASS           = chOtelPassword;
     CH_HYPERDX_PASS        = chHyperdxPassword;
     REGISTRY_PASS          = registryPushPassword;
+    PDNS_API_KEY           = pdnsApiKey;
+    PDNS_TSIG_SECRET       = pdnsTsigSecret;
 
     # Constants
     CH_USER_WRITER  = ch.user;
@@ -82,6 +87,7 @@ let
     REGISTRY_USER   = r.pushUser;
     OBS_NS          = o.namespace;
     REG_NS          = r.namespace;
+    PDNS_NS         = p.namespace;
   } ''
     mkdir -p $out
 
@@ -230,6 +236,29 @@ let
         metadata:{name:"registry-htpasswd", namespace:$ns},
         stringData:{htpasswd:$ht, "push-password":$pw}}' \
       > $out/registry-htpasswd.json
+
+    # ── 6. pdns-credentials (ns: pdns) ────────────────────────────────
+    # API key, TSIG secret, and PG password (placeholder — bootstrap
+    # patches it from pg-app, same as matrix-secrets).
+    jq -n \
+      --arg api  "$PDNS_API_KEY" \
+      --arg tsig "$PDNS_TSIG_SECRET" \
+      --arg ns   "$PDNS_NS" \
+      '{apiVersion:"v1", kind:"Secret",
+        metadata:{name:"pdns-credentials", namespace:$ns},
+        stringData:{"api-key":$api, "tsig-secret":$tsig,
+                    "pg-password":"__PG_PASSWORD_INJECTED_AT_BOOT__"}}' \
+      > $out/pdns-credentials.json
+
+    # ── 7. pdns-tsig-secret (ns: cert-manager) ───────────────────────
+    # cert-manager's RFC2136 solver reads the TSIG key from this Secret
+    # in its own namespace.
+    jq -n \
+      --arg tsig "$PDNS_TSIG_SECRET" \
+      '{apiVersion:"v1", kind:"Secret",
+        metadata:{name:"pdns-tsig-secret", namespace:"cert-manager"},
+        stringData:{"tsig-secret-key":$tsig}}' \
+      > $out/pdns-tsig-secret.json
 
     echo "Generated $(ls $out/*.json | wc -l) Secret manifests"
   '';

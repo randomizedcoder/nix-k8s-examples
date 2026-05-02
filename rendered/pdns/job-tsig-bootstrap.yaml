@@ -1,0 +1,76 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pdns-tsig-bootstrap
+  namespace: pdns
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+  labels:
+    app.kubernetes.io/name: pdns-tsig-bootstrap
+    app.kubernetes.io/part-of: pdns
+spec:
+  backoffLimit: 10
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pdns-tsig-bootstrap
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: psql
+        image: ghcr.io/cloudnative-pg/postgresql:16.4
+        command:
+        - sh
+        - -c
+        - |
+          PGPASSWORD="$PG_PASSWORD" psql \
+            -h pg-rw.postgres.svc.cluster.local \
+            -U app \
+            -d pdns \
+            -c "INSERT INTO tsigkeys (name, algorithm, secret)
+                VALUES ('acme-update', 'hmac-sha256', '$TSIG_SECRET')
+                ON CONFLICT (name, algorithm) DO UPDATE SET secret = EXCLUDED.secret;"
+
+          # Allow TSIG-authenticated RFC2136 updates for each domain
+          PGPASSWORD="$PG_PASSWORD" psql \
+  -h pg-rw.postgres.svc.cluster.local \
+  -U app \
+  -d pdns \
+  -c "INSERT INTO domainmetadata (domain_id, kind, content)
+      SELECT id, 'TSIG-ALLOW-DNSUPDATE', 'acme-update'
+      FROM domains WHERE name = 'seddon.ca'
+      AND NOT EXISTS (
+        SELECT 1 FROM domainmetadata
+        WHERE domain_id = domains.id
+          AND kind = 'TSIG-ALLOW-DNSUPDATE'
+          AND content = 'acme-update'
+      );"
+
+                  PGPASSWORD="$PG_PASSWORD" psql \
+  -h pg-rw.postgres.svc.cluster.local \
+  -U app \
+  -d pdns \
+  -c "INSERT INTO domainmetadata (domain_id, kind, content)
+      SELECT id, 'TSIG-ALLOW-DNSUPDATE', 'acme-update'
+      FROM domains WHERE name = 'xtcp.io'
+      AND NOT EXISTS (
+        SELECT 1 FROM domainmetadata
+        WHERE domain_id = domains.id
+          AND kind = 'TSIG-ALLOW-DNSUPDATE'
+          AND content = 'acme-update'
+      );"
+
+        env:
+        - name: PG_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: pdns-credentials
+              key: pg-password
+        - name: TSIG_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: pdns-credentials
+              key: tsig-secret
+

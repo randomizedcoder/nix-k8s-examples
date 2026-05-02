@@ -6,7 +6,7 @@
 #   nix run .#k8s-gen-secrets             # generate (refuses if dir exists)
 #   nix run .#k8s-gen-secrets -- --force  # regenerate (overwrites)
 #
-# The 17 files produced here are consumed at Nix build time by
+# The 19 files produced here are consumed at Nix build time by
 # nix/secrets.nix, which derives bcrypt hashes, JSON configs, and K8s
 # Secret YAMLs.  See docs/secrets.md for the full design.
 #
@@ -75,6 +75,13 @@
 
       # ── Registry (1 secret) ─────────────────────────────────────────
       gen_hex registry-push-password 24
+
+      # ── PowerDNS (2 secrets) ────────────────────────────────────────
+      gen_hex pdns-api-key 32
+      # TSIG key must be base64-encoded (RFC2845). Generate 32 random
+      # bytes and base64-encode them — PowerDNS and cert-manager both
+      # expect base64 for HMAC-SHA256 TSIG keys.
+      openssl rand -base64 32 > "$DIR/pdns-tsig-secret"
 
       # ── SSH (2 files: private key + public key) ─────────────────────
       # ED25519 key pair for passwordless SSH into the MicroVMs. The

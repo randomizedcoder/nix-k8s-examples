@@ -1,0 +1,78 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: otel-ch-users
+  namespace: observability
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+  labels:
+    app.kubernetes.io/name: otel-ch-users
+    app.kubernetes.io/part-of: observability
+spec:
+  backoffLimit: 10
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: otel-ch-users
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: clickhouse-client
+        image: clickhouse/clickhouse-server:24.3
+        command:
+          - /bin/sh
+          - -c
+          - |
+            set -e
+            CH_HOST="clickhouse.clickhouse.svc.cluster.local"
+
+            # Bail if credentials are still placeholders.
+            if [ -z "$CLICKHOUSE_PASSWORD" ] || [ "$CLICKHOUSE_PASSWORD" = "" ]; then
+              echo "CLICKHOUSE_PASSWORD is empty — Secret not yet populated."
+              exit 1
+            fi
+            if [ -z "$HYPERDX_PASSWORD" ]; then
+              echo "HYPERDX_PASSWORD is empty — Secret not yet populated."
+              exit 1
+            fi
+
+            # Wait for ClickHouse.
+            until clickhouse-client --host "$CH_HOST" \
+                --query "SELECT 1" >/dev/null 2>&1; do
+              echo "waiting for ClickHouse..."
+              sleep 2
+            done
+
+            echo "creating/updating CH users..."
+            clickhouse-client --host "$CH_HOST" --multiquery <<SQL
+            CREATE USER IF NOT EXISTS otel ON CLUSTER ch4 IDENTIFIED BY '$CLICKHOUSE_PASSWORD';
+            ALTER  USER otel ON CLUSTER ch4 IDENTIFIED BY '$CLICKHOUSE_PASSWORD';
+            GRANT  INSERT ON otel.* TO otel ON CLUSTER ch4;
+            GRANT  SELECT ON otel.* TO otel ON CLUSTER ch4;
+
+            CREATE USER IF NOT EXISTS hyperdx ON CLUSTER ch4 IDENTIFIED BY '$HYPERDX_PASSWORD';
+            ALTER  USER hyperdx ON CLUSTER ch4 IDENTIFIED BY '$HYPERDX_PASSWORD';
+            GRANT  SELECT ON otel.* TO hyperdx ON CLUSTER ch4;
+            SQL
+            echo "CH users configured."
+        env:
+        - name: CLICKHOUSE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: otel-ch-credentials
+              key: CLICKHOUSE_PASSWORD
+        - name: HYPERDX_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: otel-ch-credentials
+              key: HYPERDX_PASSWORD
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+

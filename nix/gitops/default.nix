@@ -29,6 +29,7 @@ let
   matrix       = import (envDir + "/matrix.nix")        { inherit pkgs lib; };
   observability = import (envDir + "/observability.nix") { inherit pkgs lib helm; };
   registry     = import (envDir + "/registry.nix")      { inherit pkgs lib; };
+  pdns         = import (envDir + "/pdns.nix")          { inherit pkgs lib; };
 
   # Combine all manifests
   allManifests = base.manifests ++ argocd.manifests ++ cilium.manifests
@@ -39,7 +40,8 @@ let
     ++ certManager.manifests
     ++ matrix.manifests
     ++ observability.manifests
-    ++ registry.manifests;
+    ++ registry.manifests
+    ++ pdns.manifests;
 
   emitStep = m:
     if m ? source then ''
