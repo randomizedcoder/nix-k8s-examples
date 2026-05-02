@@ -330,7 +330,7 @@ rec {
   pdns = {
     namespace = "pdns";
     domains   = [ "seddon.ca" "xtcp.io" ];
-    image     = "powerdns/pdns-auth-49:4.9.3";
+    image     = "registry.lab.local/powerdns/pdns-auth-49:4.9.3";
     database  = "pdns";
     pgUser    = "app";           # reuse CNPG-managed user
     vip       = "10.33.33.52";
@@ -342,10 +342,13 @@ rec {
   };
 
   # ─── In-cluster OCI registry (Zot) ────────────────────────────────
-  # A lightweight registry hosted inside the cluster so Nix-built
-  # images (e.g. hubble-otel from the archived cilium/hubble-otel
-  # tree) can be pushed from the dev box and pulled by containerd
-  # without going through a public registry.
+  # Dual-purpose registry:
+  #   1. Private — Nix-built images (e.g. hubble-otel) pushed from
+  #      the dev box, pulled by containerd.
+  #   2. Pull-through cache — Zot's sync extension proxies docker.io
+  #      and registry.k8s.io on-demand; containerd mirrors both
+  #      through Zot (see nix/k8s-module.nix). Avoids Docker Hub
+  #      rate limits (100 pulls/6h) during cluster bootstrap.
   #
   # TLS: the registry leaf cert `registry-tls.{crt,key}` is signed at
   # build time by the cluster CA (see nix/certs.nix) and baked into
@@ -367,7 +370,8 @@ rec {
     httpsPort = 443;
     zotPort   = 5000;
     # PVC size for the registry blob store (local-path).
-    storageGi = 5;
+    # Sized for private images + Docker Hub pull-through cache.
+    storageGi = 20;
     # Zot image pin. Use upstream minimal tag.
     image = "ghcr.io/project-zot/zot-linux-amd64:v2.1.2";
     # Push user for the bootstrap + push scripts; password is

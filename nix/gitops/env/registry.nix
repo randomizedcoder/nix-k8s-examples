@@ -1,9 +1,16 @@
 # nix/gitops/env/registry.nix
 #
-# In-cluster OCI registry (Zot). Lets Nix-built images — starting
-# with hubble-otel from the archived cilium/hubble-otel tree — be
-# pushed from the dev box and pulled by containerd without any
-# public-registry hop.
+# In-cluster OCI registry (Zot). Serves two roles:
+#
+#   1. Private registry — Nix-built images (e.g. hubble-otel) are
+#      pushed from the dev box and pulled by containerd.
+#
+#   2. Pull-through cache — Zot's sync extension proxies docker.io
+#      and registry.k8s.io on-demand. containerd is configured
+#      (nix/k8s-module.nix) to try the local registry first for
+#      images from those upstreams, falling back on miss. This avoids
+#      Docker Hub's anonymous rate limit (100 pulls/6h) during cluster
+#      bootstrap when all 4 nodes pull simultaneously.
 #
 # Topology:
 #
@@ -23,7 +30,8 @@
 #   │       bundle (registry-tls.{crt,key}, signed by cluster CA)│
 #   │     – htpasswd Secret mounted for push auth                │
 #   │     – anonymous pull allowed, push requires htpasswd       │
-#   │     – PVC (local-path, 5Gi) for blob store                 │
+#   │     – PVC (local-path) for blob store + cache              │
+#   │     – sync extension: on-demand Docker Hub proxy           │
 #   │                                                            │
 #   └────────────────────────────────────────────────────────────┘
 #         ↑
@@ -41,6 +49,11 @@ let
   # Zot config: anonymous pull + htpasswd-gated push, TLS on the
   # listener (the LB is a pass-through L4 Service). Paths align with
   # the volumeMounts in the Deployment below.
+  #
+  # The sync extension enables on-demand pull-through caching from
+  # Docker Hub and registry.k8s.io. When a client requests an image
+  # Zot doesn't have locally, it tries each upstream in order, caches
+  # the blobs, and serves them. Subsequent pulls hit the local cache.
   zotConfig = ''
     {
       "distSpecVersion": "1.1.0",
@@ -71,6 +84,37 @@ let
               ]
             }
           }
+        }
+      },
+      "extensions": {
+        "sync": {
+          "enable": true,
+          "registries": [
+            {
+              "urls": ["https://registry-1.docker.io"],
+              "onDemand": true,
+              "tlsVerify": true,
+              "maxRetries": 3,
+              "retryDelay": "5m",
+              "content": [
+                {
+                  "prefix": "**"
+                }
+              ]
+            },
+            {
+              "urls": ["https://registry.k8s.io"],
+              "onDemand": true,
+              "tlsVerify": true,
+              "maxRetries": 3,
+              "retryDelay": "5m",
+              "content": [
+                {
+                  "prefix": "**"
+                }
+              ]
+            }
+          ]
         }
       },
       "log": {
