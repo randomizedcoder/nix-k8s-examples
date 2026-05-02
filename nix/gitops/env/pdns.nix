@@ -318,21 +318,21 @@ in
                         ON CONFLICT (name, algorithm) DO UPDATE SET secret = EXCLUDED.secret;"
 
                   # Allow TSIG-authenticated RFC2136 updates for each domain
-                  ${lib.concatMapStringsSep "\n                  " (domain: ''
-                  PGPASSWORD="$PG_PASSWORD" psql \
-                    -h pg-rw.postgres.svc.cluster.local \
-                    -U ${p.pgUser} \
-                    -d ${p.database} \
-                    -c "INSERT INTO domainmetadata (domain_id, kind, content)
-                        SELECT id, 'TSIG-ALLOW-DNSUPDATE', '${p.tsigKeyName}'
-                        FROM domains WHERE name = '${domain}'
-                        AND NOT EXISTS (
-                          SELECT 1 FROM domainmetadata
-                          WHERE domain_id = domains.id
-                            AND kind = 'TSIG-ALLOW-DNSUPDATE'
-                            AND content = '${p.tsigKeyName}'
-                        );"
-                  '') p.domains}
+                  for DOMAIN in ${lib.concatStringsSep " " p.domains}; do
+                    PGPASSWORD="$PG_PASSWORD" psql \
+                      -h pg-rw.postgres.svc.cluster.local \
+                      -U ${p.pgUser} \
+                      -d ${p.database} \
+                      -c "INSERT INTO domainmetadata (domain_id, kind, content)
+                          SELECT id, 'TSIG-ALLOW-DNSUPDATE', '${p.tsigKeyName}'
+                          FROM domains WHERE name = '$DOMAIN'
+                          AND NOT EXISTS (
+                            SELECT 1 FROM domainmetadata
+                            WHERE domain_id = domains.id
+                              AND kind = 'TSIG-ALLOW-DNSUPDATE'
+                              AND content = '${p.tsigKeyName}'
+                          );"
+                  done
                 env:
                 - name: PG_PASSWORD
                   valueFrom:
