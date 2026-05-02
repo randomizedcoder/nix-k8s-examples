@@ -12,6 +12,7 @@ data:
             gpgsql-port=5432
             gpgsql-dbname=pdns
             gpgsql-user=app
+            gpgsql-password=$(PG_PASSWORD)
             gpgsql-extra-connection-parameters=connect_timeout=5
             
             local-address=0.0.0.0

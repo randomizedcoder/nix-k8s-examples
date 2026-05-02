@@ -140,6 +140,7 @@ let
     gpgsql-port=5432
     gpgsql-dbname=${p.database}
     gpgsql-user=${p.pgUser}
+    gpgsql-password=$(PG_PASSWORD)
     gpgsql-extra-connection-parameters=connect_timeout=5
 
     local-address=0.0.0.0
