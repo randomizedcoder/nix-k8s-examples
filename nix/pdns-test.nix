@@ -30,7 +30,6 @@ in
       jq
       gnugrep
       gnused
-      sshpass
     ];
     text = ''
       set +e
@@ -41,7 +40,7 @@ in
       CP0_IP="${constants.network.ipv4.cp0}"
       VIP="${constants.pdns.vip}"
       PDNS_NS="${constants.pdns.namespace}"
-      SSH_PASS="${constants.ssh.password}"
+      SSH_KEY="''${SSH_KEY:-secrets/ssh-ed25519}"
       DOMAINS=(${builtins.concatStringsSep " " (map (d: ''"${d}"'') constants.pdns.domains)})
       NODE_IPS=(${builtins.concatStringsSep " " (map (n: ''"${constants.network.ipv4.${n}}"'') constants.nodeNames)})
 
@@ -49,10 +48,11 @@ in
       FAIL_COUNT=0
       TOTAL_START=$(time_ms)
 
-      SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o LogLevel=ERROR -o PubkeyAuthentication=no"
+      SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o LogLevel=ERROR -i $SSH_KEY"
 
       ssh_cmd() {
-        sshpass -p "$SSH_PASS" ssh $SSH_OPTS root@"$CP0_IP" "$@"
+        # shellcheck disable=SC2086,SC2029
+        ssh $SSH_OPTS root@"$CP0_IP" "$@"
       }
 
       kubectl_cmd() {
@@ -185,12 +185,11 @@ NSUPDATE_EOF
           fi
 
           # Cleanup: delete the test record
-          nsupdate -y "${constants.pdns.tsigAlgorithm}:${constants.pdns.tsigKeyName}:$TSIG_KEY" <<NSUPDATE_DEL_EOF 2>/dev/null
+          if nsupdate -y "${constants.pdns.tsigAlgorithm}:${constants.pdns.tsigKeyName}:$TSIG_KEY" <<NSUPDATE_DEL_EOF 2>/dev/null; then
 server $VIP
 update delete $TEST_DOMAIN TXT
 send
 NSUPDATE_DEL_EOF
-          if [[ $? -eq 0 ]]; then
             check_pass "RFC2136 delete TXT: OK"
           else
             check_fail "RFC2136 delete TXT: failed"
@@ -229,13 +228,11 @@ NSUPDATE_DEL_EOF
 
       # Ingress has all hosts
       INGRESS_HOSTS=$(kubectl_cmd get ingress -n nginx nginx -o jsonpath='{.spec.rules[*].host}' 2>/dev/null)
-      ALL_HOSTS_OK=true
       for domain in "${constants.nginx.hostName}" "''${DOMAINS[@]}"; do
         if echo "$INGRESS_HOSTS" | grep -q "$domain"; then
           check_pass "Ingress host $domain: present"
         else
           check_fail "Ingress host $domain: missing from Ingress"
-          ALL_HOSTS_OK=false
         fi
       done
 

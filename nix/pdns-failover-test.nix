@@ -33,7 +33,6 @@ in
       procps
       gnugrep
       gnused
-      sshpass
       jq
     ];
     text = ''
@@ -45,14 +44,15 @@ in
       CP0_IP="${constants.network.ipv4.cp0}"
       VIP="${constants.pdns.vip}"
       PDNS_NS="${constants.pdns.namespace}"
-      SSH_PASS="${constants.ssh.password}"
+      SSH_KEY="''${SSH_KEY:-secrets/ssh-ed25519}"
       TEST_DOMAIN="${builtins.head constants.pdns.domains}"
       PROBE_LOG=$(mktemp /tmp/pdns-probe-XXXXXX.log)
 
-      SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o LogLevel=ERROR -o PubkeyAuthentication=no"
+      SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o LogLevel=ERROR -i $SSH_KEY"
 
       ssh_cmd() {
-        sshpass -p "$SSH_PASS" ssh $SSH_OPTS root@"$CP0_IP" "$@"
+        # shellcheck disable=SC2086,SC2029
+        ssh $SSH_OPTS root@"$CP0_IP" "$@"
       }
 
       kubectl_cmd() {
@@ -213,12 +213,11 @@ in
 
       if [[ -n "$TSIG_KEY" ]]; then
         FO_DOMAIN="_failover-test.$TEST_DOMAIN"
-        nsupdate -y "${constants.pdns.tsigAlgorithm}:${constants.pdns.tsigKeyName}:$TSIG_KEY" <<NSUPDATE_FO_EOF 2>/dev/null
+        if nsupdate -y "${constants.pdns.tsigAlgorithm}:${constants.pdns.tsigKeyName}:$TSIG_KEY" <<NSUPDATE_FO_EOF 2>/dev/null; then
 server $VIP
 update add $FO_DOMAIN 60 TXT "failover-ok"
 send
 NSUPDATE_FO_EOF
-        if [[ $? -eq 0 ]]; then
           sleep 1
           TXT_VAL=$(dig @"$VIP" "$FO_DOMAIN" TXT +short +time=5 2>/dev/null)
           if echo "$TXT_VAL" | grep -q "failover-ok"; then
