@@ -34,34 +34,21 @@ spec:
                 ON CONFLICT (name, algorithm) DO UPDATE SET secret = EXCLUDED.secret;"
 
           # Allow TSIG-authenticated RFC2136 updates for each domain
-          PGPASSWORD="$PG_PASSWORD" psql \
-  -h pg-rw.postgres.svc.cluster.local \
-  -U app \
-  -d pdns \
-  -c "INSERT INTO domainmetadata (domain_id, kind, content)
-      SELECT id, 'TSIG-ALLOW-DNSUPDATE', 'acme-update'
-      FROM domains WHERE name = 'seddon.ca'
-      AND NOT EXISTS (
-        SELECT 1 FROM domainmetadata
-        WHERE domain_id = domains.id
-          AND kind = 'TSIG-ALLOW-DNSUPDATE'
-          AND content = 'acme-update'
-      );"
-
-                  PGPASSWORD="$PG_PASSWORD" psql \
-  -h pg-rw.postgres.svc.cluster.local \
-  -U app \
-  -d pdns \
-  -c "INSERT INTO domainmetadata (domain_id, kind, content)
-      SELECT id, 'TSIG-ALLOW-DNSUPDATE', 'acme-update'
-      FROM domains WHERE name = 'xtcp.io'
-      AND NOT EXISTS (
-        SELECT 1 FROM domainmetadata
-        WHERE domain_id = domains.id
-          AND kind = 'TSIG-ALLOW-DNSUPDATE'
-          AND content = 'acme-update'
-      );"
-
+          for DOMAIN in seddon.ca xtcp.io; do
+            PGPASSWORD="$PG_PASSWORD" psql \
+              -h pg-rw.postgres.svc.cluster.local \
+              -U app \
+              -d pdns \
+              -c "INSERT INTO domainmetadata (domain_id, kind, content)
+                  SELECT id, 'TSIG-ALLOW-DNSUPDATE', 'acme-update'
+                  FROM domains WHERE name = '$DOMAIN'
+                  AND NOT EXISTS (
+                    SELECT 1 FROM domainmetadata
+                    WHERE domain_id = domains.id
+                      AND kind = 'TSIG-ALLOW-DNSUPDATE'
+                      AND content = 'acme-update'
+                  );"
+          done
         env:
         - name: PG_PASSWORD
           valueFrom:
