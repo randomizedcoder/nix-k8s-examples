@@ -402,8 +402,11 @@ in
                 - sh
                 - -c
                 - |
-                  sed "s|\$(API_KEY)|$API_KEY|g; s|\$(PG_PASSWORD)|$PG_PASSWORD|g" \
-                    /etc/pdns-template/pdns.conf > /etc/pdns/pdns.conf
+                  while IFS= read -r line; do
+                    line=''${line//\$(API_KEY)/$API_KEY}
+                    line=''${line//\$(PG_PASSWORD)/$PG_PASSWORD}
+                    printf '%s\n' "$line"
+                  done < /etc/pdns-template/pdns.conf > /etc/pdns/pdns.conf
                 env:
                 - name: API_KEY
                   valueFrom:
