@@ -436,6 +436,7 @@ in
                   containerPort: ${toString p.apiPort}
                   protocol: TCP
                 securityContext:
+                  runAsUser: 0
                   capabilities:
                     add: ["NET_BIND_SERVICE"]
                 readinessProbe:
