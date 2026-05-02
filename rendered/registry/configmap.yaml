@@ -51,6 +51,18 @@ data:
                   "prefix": "**"
                 }
               ]
+            },
+            {
+              "urls": ["https://registry.k8s.io"],
+              "onDemand": true,
+              "tlsVerify": true,
+              "maxRetries": 3,
+              "retryDelay": "5m",
+              "content": [
+                {
+                  "prefix": "**"
+                }
+              ]
             }
           ]
         }

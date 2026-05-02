@@ -174,6 +174,17 @@ in
         ca = "${pki}/ca.crt"
     '';
 
+    # ─── registry.k8s.io pull-through cache via Zot ────────────────────
+    # Same pattern as docker.io above. Caches pause, coredns, and any
+    # other registry.k8s.io images pulled during bootstrap.
+    environment.etc."containerd/certs.d/registry.k8s.io/hosts.toml".text = ''
+      server = "https://registry.k8s.io"
+
+      [host."https://${constants.registry.host}"]
+        capabilities = ["pull", "resolve"]
+        ca = "${pki}/ca.crt"
+    '';
+
     # ─── /etc/hosts: in-cluster registry ─────────────────────────────
     # Every node resolves registry.lab.local to the Zot LB VIP so
     # containerd (and skopeo/crictl invoked on the host) reach the

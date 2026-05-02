@@ -345,10 +345,10 @@ rec {
   # Dual-purpose registry:
   #   1. Private — Nix-built images (e.g. hubble-otel) pushed from
   #      the dev box, pulled by containerd.
-  #   2. Docker Hub pull-through cache — Zot's sync extension proxies
-  #      docker.io on-demand; containerd mirrors docker.io through Zot
-  #      (see nix/k8s-module.nix). Avoids Docker Hub rate limits
-  #      (100 pulls/6h) during cluster bootstrap.
+  #   2. Pull-through cache — Zot's sync extension proxies docker.io
+  #      and registry.k8s.io on-demand; containerd mirrors both
+  #      through Zot (see nix/k8s-module.nix). Avoids Docker Hub
+  #      rate limits (100 pulls/6h) during cluster bootstrap.
   #
   # TLS: the registry leaf cert `registry-tls.{crt,key}` is signed at
   # build time by the cluster CA (see nix/certs.nix) and baked into

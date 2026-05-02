@@ -5,12 +5,12 @@
 #   1. Private registry — Nix-built images (e.g. hubble-otel) are
 #      pushed from the dev box and pulled by containerd.
 #
-#   2. Docker Hub pull-through cache — Zot's sync extension proxies
-#      docker.io on-demand. containerd is configured
+#   2. Pull-through cache — Zot's sync extension proxies docker.io
+#      and registry.k8s.io on-demand. containerd is configured
 #      (nix/k8s-module.nix) to try the local registry first for
-#      docker.io images, falling back to Docker Hub on miss. This
-#      avoids Docker Hub's anonymous rate limit (100 pulls/6h) during
-#      cluster bootstrap when all 4 nodes pull simultaneously.
+#      images from those upstreams, falling back on miss. This avoids
+#      Docker Hub's anonymous rate limit (100 pulls/6h) during cluster
+#      bootstrap when all 4 nodes pull simultaneously.
 #
 # Topology:
 #
@@ -51,9 +51,9 @@ let
   # the volumeMounts in the Deployment below.
   #
   # The sync extension enables on-demand pull-through caching from
-  # Docker Hub. When a client requests a docker.io image that Zot
-  # doesn't have locally, it fetches from Docker Hub, caches the
-  # blobs, and serves them. Subsequent pulls hit the local cache.
+  # Docker Hub and registry.k8s.io. When a client requests an image
+  # Zot doesn't have locally, it tries each upstream in order, caches
+  # the blobs, and serves them. Subsequent pulls hit the local cache.
   zotConfig = ''
     {
       "distSpecVersion": "1.1.0",
@@ -92,6 +92,18 @@ let
           "registries": [
             {
               "urls": ["https://registry-1.docker.io"],
+              "onDemand": true,
+              "tlsVerify": true,
+              "maxRetries": 3,
+              "retryDelay": "5m",
+              "content": [
+                {
+                  "prefix": "**"
+                }
+              ]
+            },
+            {
+              "urls": ["https://registry.k8s.io"],
               "onDemand": true,
               "tlsVerify": true,
               "maxRetries": 3,
