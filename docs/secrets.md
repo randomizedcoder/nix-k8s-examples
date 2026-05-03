@@ -6,7 +6,7 @@ cluster boot. Zero manual steps after `k8s-gen-secrets`.
 ## Quick Start
 
 ```bash
-nix run .#k8s-gen-secrets          # generate 17 secret files into ./secrets/
+nix run .#k8s-gen-secrets          # generate 19 secret files into ./secrets/
 nix run .#k8s-cluster-rebuild      # cluster builds with secrets baked in
 ```
 

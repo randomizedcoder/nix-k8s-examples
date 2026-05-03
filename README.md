@@ -55,8 +55,8 @@ nix run .#k8s-vm-ssh -- --node=cp0 kubectl get pods -A
 ```
 
 PKI is generated at build time and baked into VM images — no separate cert step needed.
-Application secrets (CH passwords, Matrix tokens, Anubis key, registry credentials) are
-pre-generated offline by step 4 and injected automatically at boot. See
+Application secrets (CH passwords, Matrix tokens, Anubis key, registry credentials,
+PowerDNS credentials) are pre-generated offline by step 4 and injected automatically at boot. See
 [docs/secrets.md](docs/secrets.md) for the full design.
 
 ### Wipe and Rebuild
@@ -96,7 +96,7 @@ nix run .#k8s-vm-ssh -- --node=cp0 kubectl -n argocd get applications
 |---------|-----|-------|
 | ArgoCD UI | `https://10.33.33.10:30443` | NodePort (any node IP works) |
 
-ArgoCD manages 12 Applications (cilium, argocd, base, cert-manager, clickhouse, foundationdb, matrix, nginx, observability, registry, tidb, postgres) via the rendered manifests pattern. After first boot, ArgoCD is the source of truth via git.
+ArgoCD manages 13 Applications (cilium, argocd, base, cert-manager, clickhouse, foundationdb, matrix, nginx, observability, pdns, registry, tidb, postgres) via the rendered manifests pattern. After first boot, ArgoCD is the source of truth via git.
 
 ```bash
 # Get the initial admin password
@@ -174,7 +174,7 @@ Self-hosted Matrix homeserver (Synapse) + Element Web client + matrix-hookshot (
 
 ```bash
 # 1. /etc/hosts on the dev host:
-#    10.33.33.50 matrix.lab.local element.lab.local hookshot.lab.local maubot.lab.local hello.lab.local clickstack.lab.local
+#    10.33.33.50 matrix.lab.local element.lab.local hookshot.lab.local maubot.lab.local hello.lab.local clickstack.lab.local seddon.ca xtcp.io
 
 # 2. Generate secrets (tokens, bcrypt'd maubot admin password) once per cluster:
 nix run .#k8s-matrix-bootstrap-secrets
@@ -226,7 +226,7 @@ A tiny nginx page exists primarily as a target for [TecharoHQ/Anubis](https://gi
 
 ```bash
 # 1. /etc/hosts on the dev host (append hello.lab.local to the VIP line):
-#    10.33.33.50 matrix.lab.local element.lab.local hookshot.lab.local maubot.lab.local hello.lab.local
+#    10.33.33.50 matrix.lab.local element.lab.local hookshot.lab.local maubot.lab.local hello.lab.local seddon.ca xtcp.io
 
 # 2. Bootstrap Anubis' ED25519 signing key once per cluster (outside git,
 #    written to the `anubis-secrets` Secret in ns=nginx):
@@ -250,6 +250,35 @@ curl -sk --resolve hello.lab.local:443:10.33.33.50 \
 ```
 
 Rotate the Anubis signing key: `nix run .#k8s-anubis-bootstrap-secrets -- --force` (then rollout-restart the Deployment). Tune the policy by editing `botPolicies.yaml` in `nix/gitops/env/nginx.nix` and re-rendering.
+
+The nginx Ingress also serves `seddon.ca` and `xtcp.io` with Let's Encrypt TLS certificates (issued via DNS-01 / RFC2136 through PowerDNS). All three domains share the same Cilium Ingress VIP (`10.33.33.50`) and route through Anubis to the same nginx backend.
+
+### PowerDNS (Authoritative DNS)
+
+| Service | URL | Notes |
+|---------|-----|-------|
+| DNS (VIP) | `dig @10.33.33.52 seddon.ca SOA` | Cilium L2-announced VIP; load-balanced across all nodes |
+| DNS (per-node) | `dig @10.33.33.{10,11,12,13} seddon.ca SOA` | DaemonSet on every node, hostNetwork port 53 |
+| PowerDNS API | `http://<node-ip>:8081/api/v1` | REST API for zone management (API key in `pdns-credentials` Secret) |
+
+PowerDNS Auth runs as a DaemonSet on every node (`hostNetwork: true`, port 53 UDP+TCP), backed by the existing CNPG PostgreSQL cluster (`pg-rw.postgres.svc.cluster.local`). A Cilium L2-announced LoadBalancer VIP (`10.33.33.52`) provides a stable DNS endpoint. Serves authoritative DNS for `seddon.ca` and `xtcp.io`.
+
+```
+DNS query (port 53)
+  → VIP 10.33.33.52 (Cilium L2 LB, eBPF load-balancing)
+  → PowerDNS DaemonSet pod (hostNetwork, every node)
+  → PostgreSQL backend (pg-rw.postgres.svc.cluster.local, auto-failover)
+```
+
+Integrates with cert-manager for Let's Encrypt DNS-01 validation via RFC2136 (TSIG). The `letsencrypt-prod-dns01` ClusterIssuer uses TSIG-authenticated dynamic updates to create `_acme-challenge` TXT records in PowerDNS, which Let's Encrypt validates to issue real TLS certificates.
+
+```bash
+# Smoke test (K8s resources, DNS resolution, RFC2136, cert-manager, nginx TLS)
+nix run .#k8s-pdns-test
+
+# PostgreSQL failover resilience test (kill PG primary, measure DNS recovery)
+nix run .#k8s-pdns-failover-test
+```
 
 ### Observability (ClickStack UI → ch4)
 
@@ -388,6 +417,13 @@ All targets are Linux-only (QEMU MicroVMs). Run any target with `nix run .#<name
 |--------|:----:|-------------|
 | `k8s-chaos-failover` | No | Loop-kill nodes one at a time; measure per-DB failover recovery time |
 
+### PowerDNS
+
+| Target | Sudo | Description |
+|--------|:----:|-------------|
+| `k8s-pdns-test` | No | Smoke test: K8s resources, DNS resolution (VIP + per-node), RFC2136 TSIG, cert-manager, nginx TLS |
+| `k8s-pdns-failover-test` | No | PG failover resilience: kill primary, measure DNS recovery time + SERVFAIL count |
+
 ### Matrix
 
 | Target | Sudo | Description |
@@ -474,7 +510,7 @@ On first boot, a systemd oneshot service (`k8s-gitops-bootstrap`) on cp0 automat
    └── Wait for Application CRD + argocd-server rollout
 6. Apply all ArgoCD Application CRs
    (cilium, argocd, base, cert-manager, clickhouse, foundationdb,
-    matrix, nginx, observability, registry, tidb, postgres)
+    matrix, nginx, observability, pdns, registry, tidb, postgres)
 7. Touch /var/lib/k8s-bootstrap/done (idempotent marker)
 ```
 
@@ -500,7 +536,7 @@ This project implements the [rendered manifests pattern](https://akuity.io/blog/
 | Chart | Version | App Version |
 |-------|---------|-------------|
 | Cilium | 1.19.3 | 1.19.3 |
-| ArgoCD (argo-cd) | 9.5.0 | v3.3.6 |
+| ArgoCD (argo-cd) | 9.5.11 | v3.3.9 |
 | CloudNativePG (CNPG) | 0.28.0 | v1.29.0 |
 | OpenTelemetry Collector | 0.140.0 | 0.140.0 |
 | ClickStack | 1.1.1 | 2.8.0 |
@@ -536,9 +572,10 @@ nix run .#k8s-render-manifests -- --check
 | **FoundationDB** | Plain YAML | 3 coordinators + 4 storage, triple-ssd replication, benchmark |
 | **TiDB** | Plain YAML | 3 PD + 4 TiKV + 2 TiDB, MySQL-compatible distributed SQL, sysbench |
 | **PostgreSQL (CNPG)** | Helm-rendered + CR | 1 primary + 3 replicas via CloudNativePG operator, auto-failover |
-| **nginx + Anubis** | Plain YAML | Hello-world page fronted by [TecharoHQ/Anubis](https://github.com/TecharoHQ/anubis) proof-of-work anti-scraper; exposed at `https://hello.lab.local` |
+| **nginx + Anubis** | Plain YAML | Hello-world page fronted by [TecharoHQ/Anubis](https://github.com/TecharoHQ/anubis) proof-of-work anti-scraper; exposed at `https://hello.lab.local`, `https://seddon.ca`, `https://xtcp.io` (LE certs via DNS-01) |
 | **Cilium Ingress** | Helm-rendered (folded into Cilium) | Envoy-based ingress controller, LoadBalancer Service on L2-announced VIP `10.33.33.50` |
-| **cert-manager** | Upstream YAML + CRs | `selfsigned-lab` ClusterIssuer (phase 1); stub `letsencrypt-prod-dns01` (phase 2) |
+| **cert-manager** | Upstream YAML + CRs | `selfsigned-lab` ClusterIssuer + `letsencrypt-prod-dns01` ClusterIssuer (DNS-01 via RFC2136 → PowerDNS) |
+| **PowerDNS** | Plain YAML | Authoritative DNS DaemonSet (hostNetwork port 53) on L2-announced VIP `10.33.33.52`, backed by CNPG PostgreSQL; serves `seddon.ca` + `xtcp.io`, enables cert-manager DNS-01 |
 | **Matrix** | Plain YAML + CNPG `Database` CRs | Synapse + Element + hookshot + maubot + mautrix-discord on `matrix.lab.local` |
 | **Observability** | Helm-rendered + Plain YAML | OTel Collector DaemonSet + ClickStack UI (HyperDX) + hubble-otel DS + schema-bootstrap Job → `otel` database in existing ClickHouse cluster |
 | **Registry (Zot)** | Plain YAML | In-cluster OCI registry on dedicated LB VIP `10.33.33.51`; anonymous pull, htpasswd-gated push |
@@ -818,6 +855,8 @@ nix/
 ├── anubis-scripts.nix           # Anubis ED25519 key bootstrap
 ├── observability-scripts.nix    # Observability CH user + secret bootstrap
 ├── registry-scripts.nix         # In-cluster Zot registry push + secret bootstrap
+├── pdns-test.nix                # PowerDNS smoke test (k8s-pdns-test)
+├── pdns-failover-test.nix       # PowerDNS PG failover resilience test (k8s-pdns-failover-test)
 ├── render-script.nix            # Rendered manifests → nix run .#k8s-render-manifests
 ├── shell.nix                    # devShell: kubectl, helm, cilium-cli, hubble, argocd, ...
 ├── test-lib.nix                 # Shared bash helpers (color, timing, assertions)
@@ -837,14 +876,15 @@ nix/
     ├── helm-chart.nix           # Generic helm template helper (fetchurl + extract + render)
     ├── env/
     │   ├── base.nix             # Namespaces, RBAC, CoreDNS
-    │   ├── argocd.nix           # ArgoCD Helm chart (v9.5.0) + self-managing Application
+    │   ├── argocd.nix           # ArgoCD Helm chart (v9.5.11) + self-managing Application
     │   ├── cilium.nix           # Cilium Helm chart (v1.19.3) + Hubble + Application
     │   ├── clickhouse.nix       # ClickHouse 3 Keeper + 2x2 shards + Application
     │   ├── foundationdb.nix     # FoundationDB 3 coord + 4 storage + benchmark + Application
-    │   ├── nginx.nix            # Nginx hello-world + Application
+    │   ├── nginx.nix            # Nginx hello-world + Anubis + LE certs (seddon.ca, xtcp.io) + Application
+    │   ├── pdns.nix             # PowerDNS Auth DaemonSet + schema/TSIG bootstrap Jobs + Cilium LB VIP + Application
     │   ├── tidb.nix             # TiDB 3 PD + 4 TiKV + 2 TiDB + sysbench + Application
     │   ├── postgres.nix         # CNPG operator (helm) + Cluster CR (1 primary + 3 replicas) + Application
-    │   ├── cert-manager.nix     # cert-manager + selfsigned-lab ClusterIssuer (phase 1) + stub LE DNS-01 (phase 2)
+    │   ├── cert-manager.nix     # cert-manager + selfsigned-lab ClusterIssuer + letsencrypt-prod-dns01 (RFC2136 → PowerDNS)
     │   ├── matrix.nix           # Matrix stack aggregator: Synapse + Element + hookshot + maubot + mautrix-discord
     │   ├── observability.nix    # OTel Collector (helm) + ClickStack UI (helm) + hubble-otel DS + schema-bootstrap Job
     │   └── registry.nix         # In-cluster Zot OCI registry + dedicated LB VIP + containerd mirror config
@@ -865,10 +905,11 @@ rendered/                        # Committed rendered manifests (git-tracked)
 ├── cilium/                      # Cilium install.yaml (helm-rendered), values, Application CR
 ├── clickhouse/                  # ClickHouse manifests
 ├── fdb/                         # FoundationDB manifests + benchmark
-├── nginx/                       # Nginx manifests
+├── nginx/                       # Nginx manifests (Ingress serves hello.lab.local + seddon.ca + xtcp.io)
+├── pdns/                        # PowerDNS DaemonSet, schema/TSIG bootstrap Jobs, Cilium LB VIP
 ├── tidb/                        # TiDB PD + TiKV + TiDB + sysbench manifests
 ├── postgres/                    # local-path-provisioner, CNPG operator (helm-rendered), Cluster CR, NodePort services
-├── cert-manager/                # Upstream install + selfsigned-lab ClusterIssuer chain + Application
+├── cert-manager/                # Upstream install + selfsigned-lab + letsencrypt-prod-dns01 ClusterIssuers + Application
 ├── matrix/                      # Synapse, Element, hookshot, maubot, mautrix-discord, Ingress, Certificate, Databases
 ├── observability/               # OTel Collector, ClickStack UI, hubble-otel, schema-bootstrap Job
 └── registry/                    # Zot registry, LB VIP pool, htpasswd + TLS Secrets
