@@ -179,7 +179,7 @@ NSUPDATE_EOF
 
         if [[ $ADD_RC -eq 0 ]]; then
           # Verify the TXT record (allow time for PG write + zone reload)
-          sleep 3
+          sleep 5
           TXT_VAL=$(dig @"$VIP" "$TEST_DOMAIN" TXT +short +time=5 2>/dev/null)
           if echo "$TXT_VAL" | grep -q "smoke-test-ok"; then
             check_pass "RFC2136 add + verify TXT: OK" "$(elapsed_ms "$P5_START")"
