@@ -12,6 +12,7 @@ data:
             gpgsql-port=5432
             gpgsql-dbname=pdns
             gpgsql-user=app
+            gpgsql-password=__PG_PASSWORD__
             gpgsql-extra-connection-parameters=connect_timeout=5
             
             local-address=0.0.0.0
@@ -23,7 +24,7 @@ data:
             
             # API (health checks + management)
             api=yes
-            api-key=$(API_KEY)
+            api-key=__API_KEY__
             webserver-address=0.0.0.0
             webserver-port=8081
             webserver-allow-from=10.244.0.0/16,10.96.0.0/12,10.33.33.0/24,127.0.0.0/8

@@ -56,7 +56,10 @@ in
       }
 
       kubectl_cmd() {
-        ssh_cmd kubectl "$@"
+        local escaped
+        # shellcheck disable=SC2059
+        escaped="$(printf ' %q' "$@")"
+        ssh_cmd "KUBECONFIG=/var/lib/kubernetes/pki/admin-kubeconfig kubectl$escaped"
       }
 
       check_pass() {
@@ -175,8 +178,8 @@ NSUPDATE_EOF
         ADD_RC=$?
 
         if [[ $ADD_RC -eq 0 ]]; then
-          # Verify the TXT record
-          sleep 1
+          # Verify the TXT record (allow time for PG write + zone reload)
+          sleep 3
           TXT_VAL=$(dig @"$VIP" "$TEST_DOMAIN" TXT +short +time=5 2>/dev/null)
           if echo "$TXT_VAL" | grep -q "smoke-test-ok"; then
             check_pass "RFC2136 add + verify TXT: OK" "$(elapsed_ms "$P5_START")"

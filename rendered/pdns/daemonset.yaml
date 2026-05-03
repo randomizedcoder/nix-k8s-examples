@@ -28,8 +28,9 @@ spec:
         - sh
         - -c
         - |
-          sed "s|\$(API_KEY)|$API_KEY|g; s|\$(PG_PASSWORD)|$PG_PASSWORD|g" \
-            /etc/pdns-template/pdns.conf > /etc/pdns/pdns.conf
+          sed -e "s/__PG_PASSWORD__/$PG_PASSWORD/g" \
+              -e "s/__API_KEY__/$API_KEY/g" \
+              /etc/pdns-template/pdns.conf > /etc/pdns/pdns.conf
         env:
         - name: API_KEY
           valueFrom:
