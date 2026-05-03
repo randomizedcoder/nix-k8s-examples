@@ -28,11 +28,9 @@ spec:
         - sh
         - -c
         - |
-          while IFS= read -r line; do
-            line=${line//\$(API_KEY)/$API_KEY}
-            line=${line//\$(PG_PASSWORD)/$PG_PASSWORD}
-            printf '%s\n' "$line"
-          done < /etc/pdns-template/pdns.conf > /etc/pdns/pdns.conf
+          sed -e "s/__PG_PASSWORD__/$PG_PASSWORD/g" \
+              -e "s/__API_KEY__/$API_KEY/g" \
+              /etc/pdns-template/pdns.conf > /etc/pdns/pdns.conf
         env:
         - name: API_KEY
           valueFrom:

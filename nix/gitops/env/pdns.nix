@@ -140,7 +140,7 @@ let
     gpgsql-port=5432
     gpgsql-dbname=${p.database}
     gpgsql-user=${p.pgUser}
-    gpgsql-password=$(PG_PASSWORD)
+    gpgsql-password=__PG_PASSWORD__
     gpgsql-extra-connection-parameters=connect_timeout=5
 
     local-address=0.0.0.0
@@ -152,7 +152,7 @@ let
 
     # API (health checks + management)
     api=yes
-    api-key=$(API_KEY)
+    api-key=__API_KEY__
     webserver-address=0.0.0.0
     webserver-port=${toString p.apiPort}
     webserver-allow-from=10.244.0.0/16,10.96.0.0/12,10.33.33.0/24,127.0.0.0/8
@@ -403,11 +403,9 @@ in
                 - sh
                 - -c
                 - |
-                  while IFS= read -r line; do
-                    line=''${line//\$(API_KEY)/$API_KEY}
-                    line=''${line//\$(PG_PASSWORD)/$PG_PASSWORD}
-                    printf '%s\n' "$line"
-                  done < /etc/pdns-template/pdns.conf > /etc/pdns/pdns.conf
+                  sed -e "s/__PG_PASSWORD__/$PG_PASSWORD/g" \
+                      -e "s/__API_KEY__/$API_KEY/g" \
+                      /etc/pdns-template/pdns.conf > /etc/pdns/pdns.conf
                 env:
                 - name: API_KEY
                   valueFrom:
