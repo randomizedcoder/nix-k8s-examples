@@ -56,7 +56,10 @@ in
       }
 
       kubectl_cmd() {
-        ssh_cmd kubectl "$@"
+        local escaped
+        # shellcheck disable=SC2059
+        escaped="$(printf ' %q' "$@")"
+        ssh_cmd "KUBECONFIG=/var/lib/kubernetes/pki/admin-kubeconfig kubectl$escaped"
       }
 
       cleanup() {
