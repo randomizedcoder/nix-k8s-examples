@@ -304,7 +304,7 @@ in
           namespace: nginx
           annotations:
             cert-manager.io/cluster-issuer: selfsigned-lab
-            argocd.argoproj.io/sync-wave: "5"
+            argocd.argoproj.io/sync-wave: "3"
         spec:
           ingressClassName: cilium
           tls:
