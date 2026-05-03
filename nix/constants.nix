@@ -172,9 +172,9 @@ rec {
       hash    = "sha256-yOBd+eq/kBnmL1ED4fNYFLTxtDkW+IUZ5a5ONsaapCs=";
     };
     argocd = {
-      version = "9.5.0";  # appVersion v3.3.6
-      url     = "https://github.com/argoproj/argo-helm/releases/download/argo-cd-9.5.0/argo-cd-9.5.0.tgz";
-      hash    = "sha256-2u2U/iCgJ3LFh4w2dKSXbaLF2au5oeIDVpkYnCnfjgk=";
+      version = "9.5.11";  # appVersion v3.3.9 — fixes GHSA-3v3m-wc6v-x4x3 (secret extraction via ServerSideDiff)
+      url     = "https://github.com/argoproj/argo-helm/releases/download/argo-cd-9.5.11/argo-cd-9.5.11.tgz";
+      hash    = "sha256-TyvlRDv3PifSR0mcO/un/24CJo2UzIBHeu8j4a6osB8=";
     };
     cnpg = {
       version = "0.28.0";  # appVersion v1.29.0
